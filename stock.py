@@ -259,6 +259,129 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
     if returns is not None:
         fig = plot_return_histogram(returns, '연간', 'KOSPI', bins, bin_labels, colors)
         st.plotly_chart(fig, use_container_width=True)
+        
+        # KOSPI 수익률 분포 상세 설명
+        with st.expander("📚 KOSPI 연 수익률 분포 상세 분석", expanded=False):
+            st.markdown("""
+            ### 📊 KOSPI 연 수익률 분포 해석 가이드
+            
+            위의 히스토그램은 1981년부터 현재까지 **KOSPI 지수의 연간 수익률 분포**를 보여줍니다.
+            
+            #### 🔍 그래프 읽는 방법
+            
+            **1. X축 (수익률 구간)**: 연간 수익률을 10% 단위로 구분
+            - 예: "10~20" = 연간 수익률이 10% 이상 20% 미만인 구간
+            
+            **2. Y축 (발생 빈도)**: 해당 구간에 속한 연도의 비율(%)
+            - 예: "20%" = 전체 기간 중 20%의 연도가 해당 구간에 속함
+            
+            **3. 색상 구분**:
+            - 🔴 **회색**: 손실 구간 (음수 수익률)
+            - 🔵 **파란색**: 이익 구간 (양수 수익률)
+            
+            **4. 손실/이익 경계선**: 0% 지점에 점선으로 표시
+            """)
+            
+            # 실제 KOSPI 통계 계산 (returns가 있을 때)
+            if returns is not None and not returns.empty:
+                kospi_stats = {
+                    'total_years': len(returns),
+                    'positive_years': (returns > 0).sum(),
+                    'negative_years': (returns <= 0).sum(),
+                    'positive_pct': (returns > 0).mean() * 100,
+                    'negative_pct': (returns <= 0).mean() * 100,
+                    'avg_return': returns.mean(),
+                    'std_return': returns.std(),
+                    'max_return': returns.max(),
+                    'min_return': returns.min(),
+                    'max_year': returns.idxmax(),
+                    'min_year': returns.idxmin()
+                }
+                
+                st.markdown(f"""
+                #### 📈 KOSPI 역사적 수익률 통계 (1981~현재)
+                
+                **기본 통계**:
+                - 📅 **분석 기간**: {kospi_stats['total_years']}년간 ({returns.index.min()}~{returns.index.max()})
+                - 📊 **평균 연 수익률**: {kospi_stats['avg_return']:.2f}%
+                - 📏 **변동성 (표준편차)**: {kospi_stats['std_return']:.2f}%
+                
+                **수익/손실 확률**:
+                - ✅ **상승 확률**: {kospi_stats['positive_pct']:.1f}% ({kospi_stats['positive_years']}년)
+                - ❌ **하락 확률**: {kospi_stats['negative_pct']:.1f}% ({kospi_stats['negative_years']}년)
+                
+                **극값 기록**:
+                - 🏆 **최고 수익률**: {kospi_stats['max_return']:.2f}% ({kospi_stats['max_year']}년)
+                - ⚠️ **최저 수익률**: {kospi_stats['min_return']:.2f}% ({kospi_stats['min_year']}년)
+                """)
+                
+                # 구간별 분석
+                hist_data = pd.cut(returns, bins=bins, labels=bin_labels, right=False)
+                hist_counts = hist_data.value_counts().sort_index()
+                hist_percentages = (hist_counts / len(returns)) * 100
+                
+                st.markdown("#### 🎯 구간별 상세 분석")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**손실 구간 분석** 🔴")
+                    loss_bins = [label for label in bin_labels if any(char in label for char in ['-', '~-'])]
+                    loss_total = sum(hist_percentages.get(label, 0) for label in loss_bins if label in hist_percentages.index)
+                    
+                    for label in loss_bins:
+                        if label in hist_percentages.index and hist_percentages[label] > 0:
+                            st.write(f"- **{label}%**: {hist_percentages[label]:.1f}% ({hist_counts[label]}년)")
+                    
+                    st.info(f"💡 **총 손실 확률**: {loss_total:.1f}%")
+                
+                with col2:
+                    st.markdown("**이익 구간 분석** 🔵")
+                    profit_bins = [label for label in bin_labels if not any(char in label for char in ['-']) or label.startswith('0~')]
+                    profit_total = sum(hist_percentages.get(label, 0) for label in profit_bins if label in hist_percentages.index)
+                    
+                    for label in profit_bins:
+                        if label in hist_percentages.index and hist_percentages[label] > 0:
+                            st.write(f"- **{label}%**: {hist_percentages[label]:.1f}% ({hist_counts[label]}년)")
+                    
+                    st.success(f"💡 **총 이익 확률**: {profit_total:.1f}%")
+                
+                # 투자 시사점
+                st.markdown("""
+                #### 💰 투자 시사점
+                
+                **1. 장기 투자 관점**:
+                - KOSPI는 장기적으로 상승 편향을 보임 (상승 확률 > 하락 확률)
+                - 연평균 수익률이 양수로, 장기 보유 시 수익 가능성 높음
+                
+                **2. 리스크 관리**:
+                - 변동성이 존재하므로 단기 투자는 신중히 접근
+                - 극단적 손실/이익 구간의 빈도를 참고하여 리스크 관리
+                
+                **3. 분산 투자**:
+                - 개별 종목의 상관관계를 고려한 포트폴리오 구성
+                - 시장 지수와 다른 움직임을 보이는 자산 혼합
+                
+                **4. 타이밍 전략**:
+                - 역사적 패턴을 참고하되, 과거 성과가 미래를 보장하지 않음
+                - 정기적 투자(Dollar Cost Averaging) 고려
+                """)
+            
+            st.markdown("""
+            #### 📚 추가 학습 자료
+            
+            **관련 개념**:
+            - **변동성**: 수익률의 표준편차로 측정되는 가격 변동 정도
+            - **샤프 비율**: 위험 대비 수익률을 나타내는 지표
+            - **최대 낙폭**: 최고점에서 최저점까지의 최대 하락폭
+            - **베타**: 시장 대비 개별 종목의 민감도
+            
+            **활용 방법**:
+            1. 개별 종목 분석 시 KOSPI와 비교하여 상대적 성과 평가
+            2. 포트폴리오 구성 시 시장 위험도 참고 자료로 활용
+            3. 투자 목표 수익률 설정 시 현실적 기준점으로 활용
+            """)
+        
         # 코스피 연도별 종가 막대그래프
         price_df = yearly_data.reset_index()
         price_df.columns = ['연도', '종가']
@@ -547,6 +670,78 @@ if st.button("📊 분석하기", type="primary"):
                         corr_color = "red"
                     
                     st.info(f"💡 **해석**: {corr_desc}")
+                
+                # 상관관계 계산식 및 상세 설명
+                with st.expander("📚 상관관계 분석 상세 설명", expanded=False):
+                    st.markdown("""
+                    ### 🧮 피어슨 상관계수 계산식
+                    
+                    상관계수 r은 다음 공식으로 계산됩니다:
+                    
+                    $r = \\frac{\\sum_{i=1}^{n}(x_i - \\bar{x})(y_i - \\bar{y})}{\\sqrt{\\sum_{i=1}^{n}(x_i - \\bar{x})^2 \\sum_{i=1}^{n}(y_i - \\bar{y})^2}}$
+                    
+                    여기서:
+                    - **x**: 개별 주식의 연도별 종가
+                    - **y**: 코스피 지수의 연도별 종가
+                    - **x̄, ȳ**: 각각의 평균값
+                    - **n**: 관측 연도 수
+                    """)
+                    
+                    st.markdown("""
+                    ### 📊 상관계수 해석 가이드
+                    
+                    | 상관계수 범위 | 해석 | 투자 의미 |
+                    |--------------|------|-----------|
+                    | **0.8 ~ 1.0** | 매우 강한 양의 상관관계 | 시장과 거의 동일하게 움직임, 분산투자 효과 낮음 |
+                    | **0.6 ~ 0.8** | 강한 양의 상관관계 | 시장과 대체로 동조, 시장 상승기에 유리 |
+                    | **0.4 ~ 0.6** | 보통 양의 상관관계 | 시장과 어느 정도 연관, 적절한 분산 효과 |
+                    | **0.2 ~ 0.4** | 약한 양의 상관관계 | 시장과 약간 연관, 좋은 분산투자 대상 |
+                    | **-0.2 ~ 0.2** | 무관계 | 시장과 독립적 움직임, 훌륭한 분산투자 효과 |
+                    | **-0.4 ~ -0.2** | 약한 음의 상관관계 | 시장과 약간 반대, 헤지 효과 있음 |
+                    | **-0.6 ~ -0.4** | 보통 음의 상관관계 | 시장과 반대 경향, 좋은 헤지 수단 |
+                    | **-0.8 ~ -0.6** | 강한 음의 상관관계 | 시장과 강하게 반대, 우수한 헤지 효과 |
+                    | **-1.0 ~ -0.8** | 매우 강한 음의 상관관계 | 시장과 정반대, 완벽한 헤지 수단 |
+                    """)
+                    
+                    # 현재 분석 결과에 대한 구체적 설명
+                    st.markdown(f"""
+                    ### 🎯 현재 분석 결과: {company_name}
+                    
+                    **상관계수**: {correlation:.3f}
+                    
+                    **분석**:
+                    """)
+                    
+                    if abs(correlation) >= 0.7:
+                        strength = "강한"
+                        diversification = "낮음" if correlation > 0 else "높음"
+                        market_behavior = "동조화" if correlation > 0 else "반대"
+                    elif abs(correlation) >= 0.4:
+                        strength = "보통"
+                        diversification = "보통"
+                        market_behavior = "부분 동조화" if correlation > 0 else "부분 반대"
+                    else:
+                        strength = "약한"
+                        diversification = "높음"
+                        market_behavior = "독립적"
+                    
+                    direction = "양의" if correlation > 0 else "음의" if correlation < 0 else "무"
+                    
+                    st.info(f"""
+                    - **관계 강도**: {strength} {direction} 상관관계
+                    - **시장과의 관계**: {market_behavior} 움직임
+                    - **분산투자 효과**: {diversification}
+                    - **투자 전략**: {"시장 상승기에 유리" if correlation > 0.5 else "시장 하락기 헤지 효과" if correlation < -0.3 else "독립적 투자 가치"}
+                    """)
+                    
+                    st.markdown("""
+                    ### 💡 활용 방법
+                    
+                    1. **포트폴리오 구성**: 상관관계가 낮은 종목들을 조합하여 리스크 분산
+                    2. **시장 타이밍**: 높은 양의 상관관계 종목은 시장 상승기에 집중 투자
+                    3. **헤지 전략**: 음의 상관관계 종목으로 시장 하락 리스크 대비
+                    4. **장기 투자**: 상관관계는 시간에 따라 변하므로 정기적 재분석 필요
+                    """)
         else:
             # 코스피 데이터가 없을 때는 기존 차트만 표시
             price_df = yearly_data.reset_index()
