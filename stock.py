@@ -164,8 +164,20 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
             x=zero_bin_idx - 0.5,  # 해당 bin의 왼쪽 경계
             line_dash="dash",
             line_color="black",
-            line_width=2,
-            annotation_text="손실/이익 경계"
+            line_width=2
+        )
+        # 경계선 텍스트를 선 위에 배치
+        fig.add_annotation(
+            x=zero_bin_idx - 0.5,
+            y=max(hist_percentages) * 0.5,  # 차트 중간 높이에 배치
+            text="손실/이익 경계",
+            showarrow=False,
+            font=dict(size=12, color='black'),
+            textangle=-90,  # 텍스트를 세로로 회전
+            align='center',
+            bgcolor="white",  # 배경색 추가로 가독성 향상
+            bordercolor="black",
+            borderwidth=1
         )
 
     fig.update_layout(
