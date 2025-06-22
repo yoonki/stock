@@ -1,7 +1,3 @@
-# 커스텀 가능한 한국 주식 수익률 분포 히스토그램 함수
-# FinanceDataReader + Pandas + Plotly 활용
-# 코스피 비교 차트 및 양방향 연동 UI 포함
-
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -14,11 +10,9 @@ import streamlit as st
 
 warnings.filterwarnings('ignore')
 
-# --- 회사명-티커 매핑 테이블 생성 (국내+해외) ---
-@st.cache_data(ttl=3600)  # 1시간 캐시
+@st.cache_data(ttl=3600)
 def get_all_stock_table():
     try:
-        # KRX 데이터 로딩
         krx = fdr.StockListing('KRX')
         krx = krx.rename(columns={'Code': 'Code', 'Name': 'Name'})
         krx = krx[['Code', 'Name']].drop_duplicates()
@@ -27,7 +21,6 @@ def get_all_stock_table():
 
         all_dfs = [krx]
         
-        # 해외 거래소는 선택적으로 로딩
         for market in ['NASDAQ', 'NYSE', 'AMEX']:
             try:
                 df = fdr.StockListing(market)
@@ -48,10 +41,8 @@ def get_all_stock_table():
     
     except Exception as e:
         st.error(f"주식 데이터 로딩 중 오류 발생: {str(e)}")
-        # 최소한 빈 DataFrame 반환
         return pd.DataFrame(columns=['Code', 'Name', 'Market'])
 
-# 안전한 데이터 로딩
 try:
     all_stock_table = get_all_stock_table()
     if all_stock_table.empty:
@@ -113,7 +104,6 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
     hist_counts = hist_data.value_counts().sort_index()
     hist_percentages = (hist_counts / total_count) * 100
 
-    # 제목 아래에 표시할 통계 텍스트
     subtitle = f"연 평균 정상률 (CAGR): {cagr*100:.2f}%  |  이익 확률: {positive_pct:.1f}%  |  손실 확률: {negative_pct:.1f}%  |  최고: {max_return:.2f}%({max_year})  |  최저: {min_return:.2f}%({min_year})"
 
     fig = go.Figure()
@@ -128,8 +118,6 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
         hovertemplate='구간: %{x}<br>비율: %{y:.1f}%<br>횟수: %{customdata}회<extra></extra>',
     ))
 
-    # annotation에서 <br/> 제거 및 확률만 남김
-    # 손실 확률
     fig.add_annotation(
         x=1.5, y=max(hist_percentages) * 0.85,
         text=f"손실 확률: {negative_pct:.1f}%",
@@ -137,7 +125,6 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
         font=dict(size=14, color='black'),
         align='center'
     )
-    # 이익 확률
     fig.add_annotation(
         x=len(bin_labels) * 0.7, y=max(hist_percentages) * 0.85,
         text=f"이익 확률: {positive_pct:.1f}%",
@@ -145,7 +132,6 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
         font=dict(size=14, color='black'),
         align='center'
     )
-    # 제목 아래에 subtitle 표시 (annotation으로)
     fig.add_annotation(
         text=subtitle,
         xref='paper', yref='paper',
@@ -154,7 +140,6 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
         align='center'
     )
 
-    # 손실/이익 경계선: 0%가 포함된 bin의 왼쪽 경계에 vline
     zero_bin_idx = None
     for i in range(len(bins)-1):
         if bins[i] <= 0 < bins[i+1]:
@@ -162,21 +147,20 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
             break
     if zero_bin_idx is not None:
         fig.add_vline(
-            x=zero_bin_idx - 0.5,  # 해당 bin의 왼쪽 경계
+            x=zero_bin_idx - 0.5,
             line_dash="dash",
             line_color="black",
             line_width=2
         )
-        # 경계선 텍스트를 선 위에 배치
         fig.add_annotation(
             x=zero_bin_idx - 0.5,
-            y=max(hist_percentages) * 0.5,  # 차트 중간 높이에 배치
+            y=max(hist_percentages) * 0.5,
             text="손실/이익 경계",
             showarrow=False,
             font=dict(size=12, color='black'),
-            textangle=-90,  # 텍스트를 세로로 회전
+            textangle=-90,
             align='center',
-            bgcolor="white",  # 배경색 추가로 가독성 향상
+            bgcolor="white",
             bordercolor="black",
             borderwidth=1
         )
@@ -215,27 +199,21 @@ def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, 
     return fig
 
 def get_ticker_and_name(user_input):
-    # 입력값이 (시장)까지 포함된 경우
     if '[' in user_input and ']' in user_input:
-        # 예: Apple Inc. (AAPL) [NASDAQ]
         code = user_input.split('(')[-1].split(')')[0].strip()
         name = user_input.split('(')[0].strip()
         return code, name
-    # 입력값이 6자리 숫자면 티커로 간주
     if user_input in code_to_name:
         return user_input, code_to_name[user_input]
-    # 입력값이 회사명이면
     elif user_input in name_to_code:
         return name_to_code[user_input], user_input
-    # 회사명(티커) 형태면
     elif '(' in user_input and ')' in user_input:
         name = user_input.split('(')[0].strip()
         code = user_input.split('(')[-1].replace(')','').strip()
         return code, name
     else:
-        return user_input, user_input  # fallback
+        return user_input, user_input
 
-# Streamlit UI
 st.title("📊 한국/해외 주식 연 수익률 분포 히스토그램")
 
 st.markdown("""
@@ -246,7 +224,6 @@ st.markdown("""
 - **NEW!** 📈 코스피/S&P500 비교 차트 및 상관관계 분석
 """)
 
-# 기본 KOSPI
 with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
     bins = [-100, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     bin_labels = ['~-30', '-30~-20', '-20~-10', '-10~0', '0~10', '10~20', 
@@ -260,7 +237,6 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
         fig = plot_return_histogram(returns, '연간', 'KOSPI', bins, bin_labels, colors)
         st.plotly_chart(fig, use_container_width=True)
         
-        # 코스피 연도별 종가 막대그래프
         price_df = yearly_data.reset_index()
         price_df.columns = ['연도', '종가']
         fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
@@ -274,10 +250,8 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
     else:
         st.warning("KOSPI 데이터를 불러올 수 없습니다.")
 
-# 사용자 입력 부분
 st.header("🔍 다른 종목/지수 연 수익률 분포 보기")
 
-# 세션 상태 초기화
 if 'selected_market' not in st.session_state:
     st.session_state.selected_market = 'KRX'
 
@@ -297,7 +271,6 @@ if 'last_textinput_value' not in st.session_state:
 if 'auto_analyze' not in st.session_state:
     st.session_state.auto_analyze = False
 
-# 시장별 회사 옵션 생성
 market_list = sorted(all_stock_table['Market'].unique())
 market_companies = {}
 
@@ -305,7 +278,6 @@ for market in market_list:
     market_data = all_stock_table[all_stock_table['Market'] == market]
     market_companies[market] = [f"{row.Name} ({row.Code})" for row in market_data.itertuples()]
 
-# 시장 아이콘 매핑
 market_icons = {
     'KRX': '🇰🇷',
     'NASDAQ': '🇺🇸',
@@ -313,7 +285,6 @@ market_icons = {
     'AMEX': '🇺🇸'
 }
 
-# 시장 설명 매핑
 market_descriptions = {
     'KRX': '한국거래소 (Korean Exchange)',
     'NASDAQ': '나스닥 (National Association of Securities Dealers Automated Quotations)',
@@ -321,7 +292,6 @@ market_descriptions = {
     'AMEX': '아메리칸증권거래소 (American Stock Exchange)'
 }
 
-# 1단계: 시장 선택
 st.subheader("1️⃣ 거래소/시장 선택")
 
 col_market1, col_market2 = st.columns([1, 2])
@@ -339,35 +309,28 @@ with col_market2:
     if selected_market in market_descriptions:
         st.info(f"📍 **{market_descriptions[selected_market]}**")
         
-        # 시장별 통계 정보
         market_count = len(market_companies.get(selected_market, []))
         st.caption(f"📊 등록 종목 수: **{market_count:,}개**")
 
-# 시장 변경 감지
 if selected_market != st.session_state.selected_market:
     st.session_state.selected_market = selected_market
-    # 시장이 변경되면 해당 시장의 첫 번째 회사로 초기화
     if selected_market in market_companies and market_companies[selected_market]:
         first_company = market_companies[selected_market][0]
         st.session_state.selected_company = f"{first_company} [{selected_market}]"
         st.session_state.last_selectbox_value = st.session_state.selected_company
-        # 회사명만 추출해서 text_input에 반영
         company_name = first_company.split(' (')[0]
         st.session_state.text_input_value = company_name
         st.session_state.last_textinput_value = company_name
     st.rerun()
 
-# 2단계: 회사 선택
 st.subheader(f"2️⃣ {market_icons.get(selected_market, '🌍')} {selected_market} 종목 선택")
 
-# 현재 선택된 시장의 회사 옵션
 current_market_options = market_companies.get(selected_market, [])
 
 if not current_market_options:
     st.warning(f"⚠️ {selected_market} 시장의 데이터를 불러올 수 없습니다.")
     st.stop()
 
-# selectbox의 현재 인덱스 찾기 (시장 정보 제거 후 비교)
 current_company_without_market = st.session_state.selected_company.split(' [')[0] if ' [' in st.session_state.selected_company else st.session_state.selected_company
 
 try:
@@ -377,7 +340,6 @@ except (ValueError, IndexError):
     if current_market_options:
         st.session_state.selected_company = f"{current_market_options[0]} [{selected_market}]"
 
-# selectbox
 selected = st.selectbox(
     f"회사명 또는 티커를 선택하세요 ({len(current_market_options):,}개 종목)",
     current_market_options,
@@ -385,7 +347,6 @@ selected = st.selectbox(
     key="company_selectbox"
 )
 
-# text_input
 user_input = st.text_input(
     f"직접 입력 ({selected_market} 시장 내 검색)",
     value=st.session_state.text_input_value,
@@ -393,47 +354,38 @@ user_input = st.text_input(
     help=f"{selected_market} 시장에서 회사명이나 티커로 검색하세요"
 )
 
-# selectbox 변경 감지 및 text_input 업데이트
 selected_with_market = f"{selected} [{selected_market}]"
 
 if selected_with_market != st.session_state.last_selectbox_value:
     st.session_state.last_selectbox_value = selected_with_market
     st.session_state.selected_company = selected_with_market
     
-    # selectbox에서 선택된 값을 파싱해서 회사명만 추출
     if '(' in selected and ')' in selected:
         company_name = selected.split('(')[0].strip()
         st.session_state.text_input_value = company_name
         st.session_state.last_textinput_value = company_name
         
-        # 자동 분석 트리거
         st.session_state.auto_analyze = True
         st.rerun()
 
-# text_input 변경 감지 및 selectbox 업데이트
 if user_input != st.session_state.last_textinput_value:
     st.session_state.last_textinput_value = user_input
     st.session_state.text_input_value = user_input
     
-    # text_input 값으로 현재 시장 내에서 매칭되는 옵션 찾기
     if user_input.strip():
         keyword = user_input.strip().lower()
         
-        # 현재 시장 내에서만 검색
         exact_matches = [opt for opt in current_market_options if keyword in opt.lower()]
         
         if exact_matches:
-            # 가장 유사한 항목 선택 (회사명이나 티커가 정확히 일치하는 것 우선)
             best_match = None
             
-            # 1순위: 회사명이 정확히 일치
             for opt in exact_matches:
                 company_part = opt.split('(')[0].strip().lower()
                 if company_part == keyword:
                     best_match = opt
                     break
             
-            # 2순위: 티커가 정확히 일치
             if not best_match:
                 for opt in exact_matches:
                     if '(' in opt and ')' in opt:
@@ -442,7 +394,6 @@ if user_input != st.session_state.last_textinput_value:
                             best_match = opt
                             break
             
-            # 3순위: 첫 번째 매치
             if not best_match:
                 best_match = exact_matches[0]
             
@@ -452,16 +403,14 @@ if user_input != st.session_state.last_textinput_value:
                 st.session_state.last_selectbox_value = best_match_with_market
                 st.rerun()
 
-# 유사 검색 결과 표시 (현재 시장 내에서만)
 similar_options = []
 if user_input.strip() and len(user_input.strip()) >= 2:
     keyword = user_input.strip().lower()
     similar_options = [opt for opt in current_market_options if keyword in opt.lower()]
     
-    if similar_options and len(similar_options) > 1:  # 현재 선택된 것 외에 다른 옵션이 있을 때만 표시
+    if similar_options and len(similar_options) > 1:
         st.markdown(f"**🔍 '{user_input}' 검색 결과 ({len(similar_options)}개) - {market_icons.get(selected_market, '🌍')} {selected_market}:**")
         
-        # 최대 10개까지만 표시
         display_options = similar_options[:10]
         
         for i, option in enumerate(display_options):
@@ -471,39 +420,31 @@ if user_input.strip() and len(user_input.strip()) >= 2:
                     option_with_market = f"{option} [{selected_market}]"
                     st.session_state.selected_company = option_with_market
                     st.session_state.last_selectbox_value = option_with_market
-                    # 선택된 항목의 회사명을 text_input에 반영
                     company_name = option.split('(')[0].strip()
                     st.session_state.text_input_value = company_name
                     st.session_state.last_textinput_value = company_name
                     
-                    # 자동 분석 트리거
                     st.session_state.auto_analyze = True
                     st.rerun()
             with col2:
                 st.write(f"{market_icons.get(selected_market, '🌍')} {option}")
 
-# 분석 설정
 col_year1, col_year2 = st.columns(2)
 with col_year1:
     start_year = st.number_input("시작 연도", min_value=1981, max_value=datetime.today().year-1, value=2000)
 with col_year2:
     end_year = st.number_input("종료 연도", min_value=start_year+1, max_value=datetime.today().year, value=datetime.today().year)
 
-# 자동 분석 또는 수동 분석 실행
 auto_analyze_triggered = st.session_state.get('auto_analyze', False)
 manual_analyze_clicked = st.button("📊 분석하기", type="primary")
 
-# 자동 분석 플래그 리셋
 if auto_analyze_triggered:
     st.session_state.auto_analyze = False
 
-# 분석 실행 조건
 if auto_analyze_triggered or manual_analyze_clicked:
-    # 현재 선택된 회사 정보 사용
     current_selection = st.session_state.selected_company
     ticker, company_name = get_ticker_and_name(current_selection)
     
-    # 자동 분석임을 표시
     if auto_analyze_triggered:
         st.success(f"🔄 자동 분석: **{company_name}** ({ticker}) 선택됨")
     else:
@@ -513,12 +454,10 @@ if auto_analyze_triggered or manual_analyze_clicked:
         yearly_data, returns = get_korean_stock_data(ticker, int(start_year), int(end_year))
     
     if returns is not None and not returns.empty:
-        # 1. 수익률 분포 히스토그램
         st.subheader("📈 연 수익률 분포")
         fig = plot_return_histogram(returns, '연간', company_name, bins, bin_labels, colors)
         st.plotly_chart(fig, use_container_width=True)
         
-        # 2. 상승/하락 연도 통계
         up_years = returns[returns > 0].index.tolist()
         down_years = returns[returns <= 0].index.tolist()
         
@@ -530,7 +469,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
             st.metric("📉 하락 연도 수", len(down_years))
             st.caption(f"하락 연도: {', '.join(map(str, down_years)) if down_years else '없음'}")
 
-        # 3. 최고/최저 수익률
         max_return = returns.max()
         min_return = returns.min()
         max_year = returns.idxmax() if not returns.empty else '-'
@@ -542,17 +480,11 @@ if auto_analyze_triggered or manual_analyze_clicked:
         with col4:
             st.metric("⚠️ 최저 수익률", f"{min_return:.2f}%", delta=f"{min_year}년")
 
-        # 4. 연도별 종가 추이 + 비교 지수 선택
         st.subheader("📊 연도별 종가 추이 (vs 시장 지수)")
         
-        # 4. 연도별 종가 추이 + 비교 지수 선택
-        st.subheader("📊 연도별 종가 추이 (vs 시장 지수)")
-        
-        # 비교 지수 선택
         col_index1, col_index2 = st.columns([1, 2])
         
         with col_index1:
-            # 선택된 시장에 따라 기본 비교 지수 설정
             if selected_market == 'KRX':
                 default_index = 'KOSPI'
                 available_indices = ['KOSPI', 'S&P500']
@@ -576,34 +508,29 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 st.info("📈 **S&P500** - 미국 스탠더드앤푸어스 500 지수")
                 st.caption("🏢 미국 주요 500개 기업의 시가총액 가중평균 지수")
         
-        # 지수별 티커 매핑
         index_tickers = {
             'KOSPI': 'KS11',
-            'S&P500': 'SPY'  # S&P500 ETF (SPY) 사용
+            'S&P500': 'SPY'
         }
         
-        # 선택된 비교 지수 데이터 가져오기
         comparison_ticker = index_tickers[comparison_index]
         
         with st.spinner(f'{comparison_index} 비교 데이터를 불러오는 중입니다...'):
             comparison_yearly_data, _ = get_korean_stock_data(comparison_ticker, int(start_year), int(end_year))
         
         if comparison_yearly_data is not None and not comparison_yearly_data.empty:
-            # 이중 축을 사용한 조합 차트 생성
             fig_combined = make_subplots(
                 specs=[[{"secondary_y": True}]]
             )
             
-            # 개별 주식 데이터 (막대그래프)
             price_df = yearly_data.reset_index()
             price_df.columns = ['연도', '종가']
             
-            # 시장별 통화 단위 설정
             if selected_market == 'KRX':
                 price_unit = '원'
                 price_format = ':,d'
             else:
-                price_unit = '
+                price_unit = '$'
                 price_format = ':,.2f'
             
             fig_combined.add_trace(
@@ -618,11 +545,9 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 secondary_y=False
             )
             
-            # 비교 지수 데이터 (선그래프)
             comparison_df = comparison_yearly_data.reset_index()
             comparison_df.columns = ['연도', comparison_index]
             
-            # 지수별 색상 설정
             index_colors = {
                 'KOSPI': 'red',
                 'S&P500': 'green'
@@ -644,10 +569,8 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 secondary_y=True
             )
             
-            # 축 레이블 설정
             fig_combined.update_xaxes(title_text="연도")
             
-            # 주식 가격 축 (왼쪽)
             fig_combined.update_yaxes(
                 title_text=f"{company_name} 주가 ({price_unit})", 
                 secondary_y=False,
@@ -655,7 +578,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 tickformat=',d' if selected_market == 'KRX' else ',.2f'
             )
             
-            # 비교 지수 축 (오른쪽)
             fig_combined.update_yaxes(
                 title_text=f"{comparison_index} 지수", 
                 secondary_y=True,
@@ -663,7 +585,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 tickformat=',.2f'
             )
             
-            # 레이아웃 설정
             fig_combined.update_layout(
                 title=f"📊 {company_name} vs {comparison_index} 연도별 추이 비교",
                 template='plotly_white',
@@ -680,7 +601,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
             
             st.plotly_chart(fig_combined, use_container_width=True)
             
-            # 5. 상관관계 분석
             if len(yearly_data) == len(comparison_yearly_data):
                 correlation = yearly_data.corr(comparison_yearly_data)
                 
@@ -705,12 +625,10 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     
                     st.info(f"💡 **해석**: {corr_desc}")
         else:
-            # 비교 지수 데이터가 없을 때는 기존 차트만 표시
             price_df = yearly_data.reset_index()
             price_df.columns = ['연도', '종가']
             fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
             
-            # 시장별 통화 단위 설정
             if selected_market == 'KRX':
                 currency_unit = '원'
             else:
@@ -725,7 +643,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
             st.plotly_chart(fig_price, use_container_width=True)
             st.warning(f"⚠️ {comparison_index} 비교 데이터를 불러올 수 없어 개별 차트만 표시됩니다.")
         
-        # 6. 상세 데이터 테이블 (접기/펼치기)
         with st.expander("📋 연도별 상세 데이터 보기"):
             detail_df = pd.DataFrame({
                 '연도': yearly_data.index,
@@ -734,7 +651,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
             })
             st.dataframe(detail_df, use_container_width=True)
             
-            # CSV 다운로드 버튼
             csv = detail_df.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
                 label="📥 CSV로 다운로드",
@@ -746,7 +662,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
         st.error(f"❌ '{company_name} ({ticker})' 데이터를 불러올 수 없습니다.")
         st.info("💡 다른 종목을 선택해보시거나, 티커 심볼을 확인해주세요.")
         
-        # 추천 종목 표시
         st.subheader("🎯 추천 종목")
         recommended = ["삼성전자 (005930) [KRX]", "SK하이닉스 (000660) [KRX]", "NAVER (035420) [KRX]", "카카오 (035720) [KRX]"]
         cols = st.columns(len(recommended))
@@ -761,7 +676,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     st.session_state.last_textinput_value = company_name
                     st.rerun()
 
-# Footer
 st.markdown("---")
 st.markdown("""
 ### 📌 사용법 가이드
