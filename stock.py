@@ -400,6 +400,9 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
 st.header("🔍 다른 종목/지수 연 수익률 분포 보기")
 
 # 세션 상태 초기화
+if 'selected_market' not in st.session_state:
+    st.session_state.selected_market = 'KRX'
+
 if 'selected_company' not in st.session_state:
     default_company = "삼성전자 (005930) [KRX]" if "삼성전자 (005930) [KRX]" in company_options else company_options[0]
     st.session_state.selected_company = default_company
@@ -416,32 +419,108 @@ if 'last_textinput_value' not in st.session_state:
 if 'auto_analyze' not in st.session_state:
     st.session_state.auto_analyze = False
 
-# selectbox의 현재 인덱스 찾기
+# 시장별 회사 옵션 생성
+market_list = sorted(all_stock_table['Market'].unique())
+market_companies = {}
+
+for market in market_list:
+    market_data = all_stock_table[all_stock_table['Market'] == market]
+    market_companies[market] = [f"{row.Name} ({row.Code})" for row in market_data.itertuples()]
+
+# 시장 아이콘 매핑
+market_icons = {
+    'KRX': '🇰🇷',
+    'NASDAQ': '🇺🇸',
+    'NYSE': '🇺🇸', 
+    'AMEX': '🇺🇸'
+}
+
+# 시장 설명 매핑
+market_descriptions = {
+    'KRX': '한국거래소 (Korean Exchange)',
+    'NASDAQ': '나스닥 (National Association of Securities Dealers Automated Quotations)',
+    'NYSE': '뉴욕증권거래소 (New York Stock Exchange)',
+    'AMEX': '아메리칸증권거래소 (American Stock Exchange)'
+}
+
+# 1단계: 시장 선택
+st.subheader("1️⃣ 거래소/시장 선택")
+
+col_market1, col_market2 = st.columns([1, 2])
+
+with col_market1:
+    selected_market = st.selectbox(
+        "거래소를 선택하세요",
+        market_list,
+        index=market_list.index(st.session_state.selected_market) if st.session_state.selected_market in market_list else 0,
+        format_func=lambda x: f"{market_icons.get(x, '🌍')} {x}",
+        key="market_selectbox"
+    )
+
+with col_market2:
+    if selected_market in market_descriptions:
+        st.info(f"📍 **{market_descriptions[selected_market]}**")
+        
+        # 시장별 통계 정보
+        market_count = len(market_companies.get(selected_market, []))
+        st.caption(f"📊 등록 종목 수: **{market_count:,}개**")
+
+# 시장 변경 감지
+if selected_market != st.session_state.selected_market:
+    st.session_state.selected_market = selected_market
+    # 시장이 변경되면 해당 시장의 첫 번째 회사로 초기화
+    if selected_market in market_companies and market_companies[selected_market]:
+        first_company = market_companies[selected_market][0]
+        st.session_state.selected_company = f"{first_company} [{selected_market}]"
+        st.session_state.last_selectbox_value = st.session_state.selected_company
+        # 회사명만 추출해서 text_input에 반영
+        company_name = first_company.split(' (')[0]
+        st.session_state.text_input_value = company_name
+        st.session_state.last_textinput_value = company_name
+    st.rerun()
+
+# 2단계: 회사 선택
+st.subheader(f"2️⃣ {market_icons.get(selected_market, '🌍')} {selected_market} 종목 선택")
+
+# 현재 선택된 시장의 회사 옵션
+current_market_options = market_companies.get(selected_market, [])
+
+if not current_market_options:
+    st.warning(f"⚠️ {selected_market} 시장의 데이터를 불러올 수 없습니다.")
+    st.stop()
+
+# selectbox의 현재 인덱스 찾기 (시장 정보 제거 후 비교)
+current_company_without_market = st.session_state.selected_company.split(' [')[0] if ' [' in st.session_state.selected_company else st.session_state.selected_company
+
 try:
-    current_index = company_options.index(st.session_state.selected_company)
+    current_index = current_market_options.index(current_company_without_market)
 except (ValueError, IndexError):
     current_index = 0
-    st.session_state.selected_company = company_options[0]
+    if current_market_options:
+        st.session_state.selected_company = f"{current_market_options[0]} [{selected_market}]"
 
 # selectbox
 selected = st.selectbox(
-    "회사명 또는 티커를 선택하세요", 
-    company_options, 
+    f"회사명 또는 티커를 선택하세요 ({len(current_market_options):,}개 종목)",
+    current_market_options,
     index=current_index,
     key="company_selectbox"
 )
 
 # text_input
 user_input = st.text_input(
-    "직접 입력 (회사명, 티커, 회사명(티커) 모두 가능)", 
+    f"직접 입력 ({selected_market} 시장 내 검색)",
     value=st.session_state.text_input_value,
-    key="company_textinput"
+    key="company_textinput",
+    help=f"{selected_market} 시장에서 회사명이나 티커로 검색하세요"
 )
 
 # selectbox 변경 감지 및 text_input 업데이트
-if selected != st.session_state.last_selectbox_value:
-    st.session_state.last_selectbox_value = selected
-    st.session_state.selected_company = selected
+selected_with_market = f"{selected} [{selected_market}]"
+
+if selected_with_market != st.session_state.last_selectbox_value:
+    st.session_state.last_selectbox_value = selected_with_market
+    st.session_state.selected_company = selected_with_market
     
     # selectbox에서 선택된 값을 파싱해서 회사명만 추출
     if '(' in selected and ')' in selected:
@@ -458,12 +537,12 @@ if user_input != st.session_state.last_textinput_value:
     st.session_state.last_textinput_value = user_input
     st.session_state.text_input_value = user_input
     
-    # text_input 값으로 매칭되는 옵션 찾기
+    # text_input 값으로 현재 시장 내에서 매칭되는 옵션 찾기
     if user_input.strip():
         keyword = user_input.strip().lower()
         
-        # 정확한 매치 우선 검색
-        exact_matches = [opt for opt in company_options if keyword in opt.lower()]
+        # 현재 시장 내에서만 검색
+        exact_matches = [opt for opt in current_market_options if keyword in opt.lower()]
         
         if exact_matches:
             # 가장 유사한 항목 선택 (회사명이나 티커가 정확히 일치하는 것 우선)
@@ -489,19 +568,20 @@ if user_input != st.session_state.last_textinput_value:
             if not best_match:
                 best_match = exact_matches[0]
             
-            if best_match != st.session_state.selected_company:
-                st.session_state.selected_company = best_match
-                st.session_state.last_selectbox_value = best_match
+            best_match_with_market = f"{best_match} [{selected_market}]"
+            if best_match_with_market != st.session_state.selected_company:
+                st.session_state.selected_company = best_match_with_market
+                st.session_state.last_selectbox_value = best_match_with_market
                 st.rerun()
 
-# 유사 검색 결과 표시 (text_input에 값이 있을 때만)
+# 유사 검색 결과 표시 (현재 시장 내에서만)
 similar_options = []
 if user_input.strip() and len(user_input.strip()) >= 2:
     keyword = user_input.strip().lower()
-    similar_options = [opt for opt in company_options if keyword in opt.lower()]
+    similar_options = [opt for opt in current_market_options if keyword in opt.lower()]
     
     if similar_options and len(similar_options) > 1:  # 현재 선택된 것 외에 다른 옵션이 있을 때만 표시
-        st.markdown(f"**🔍 '{user_input}' 검색 결과 ({len(similar_options)}개):**")
+        st.markdown(f"**🔍 '{user_input}' 검색 결과 ({len(similar_options)}개) - {market_icons.get(selected_market, '🌍')} {selected_market}:**")
         
         # 최대 10개까지만 표시
         display_options = similar_options[:10]
@@ -510,8 +590,9 @@ if user_input.strip() and len(user_input.strip()) >= 2:
             col1, col2 = st.columns([0.1, 0.9])
             with col1:
                 if st.button("선택", key=f"select_btn_{i}"):
-                    st.session_state.selected_company = option
-                    st.session_state.last_selectbox_value = option
+                    option_with_market = f"{option} [{selected_market}]"
+                    st.session_state.selected_company = option_with_market
+                    st.session_state.last_selectbox_value = option_with_market
                     # 선택된 항목의 회사명을 text_input에 반영
                     company_name = option.split('(')[0].strip()
                     st.session_state.text_input_value = company_name
@@ -521,7 +602,48 @@ if user_input.strip() and len(user_input.strip()) >= 2:
                     st.session_state.auto_analyze = True
                     st.rerun()
             with col2:
-                st.write(option)
+                st.write(f"{market_icons.get(selected_market, '🌍')} {option}")
+
+# 시장 정보 표시 (선택적)
+with st.expander(f"📊 {selected_market} 시장 정보", expanded=False):
+    if selected_market == 'KRX':
+        st.markdown("""
+        **🇰🇷 한국거래소 (KRX)**
+        - **설립**: 2005년 (KOSPI, KOSDAQ, KONEX 통합)
+        - **주요 지수**: KOSPI 200, KOSDAQ 150
+        - **거래시간**: 09:00 - 15:30 (KST)
+        - **특징**: 아시아 주요 거래소, 삼성전자 등 대형주 상장
+        """)
+    elif selected_market == 'NYSE':
+        st.markdown("""
+        **🇺🇸 뉴욕증권거래소 (NYSE)**
+        - **설립**: 1792년
+        - **세계 최대**: 시가총액 기준 세계 1위 거래소
+        - **거래시간**: 09:30 - 16:00 (EST)
+        - **특징**: Apple, Microsoft 등 글로벌 대기업 상장
+        """)
+    elif selected_market == 'NASDAQ':
+        st.markdown("""
+        **🇺🇸 나스닥 (NASDAQ)**
+        - **설립**: 1971년
+        - **전자거래**: 세계 최초 전자 증권거래소
+        - **거래시간**: 09:30 - 16:00 (EST)
+        - **특징**: 기술주 중심, Google, Amazon, Tesla 상장
+        """)
+    elif selected_market == 'AMEX':
+        st.markdown("""
+        **🇺🇸 아메리칸증권거래소 (AMEX)**
+        - **설립**: 1971년 (현재는 NYSE American)
+        - **거래시간**: 09:30 - 16:00 (EST)
+        - **특징**: 중소형주, ETF 중심
+        """)
+    
+    # 현재 시장의 상위 종목들 (가나다순으로 처음 5개)
+    top_companies = current_market_options[:5]
+    st.markdown(f"**🏆 주요 상장 종목 (일부)**:")
+    for i, company in enumerate(top_companies, 1):
+        st.write(f"{i}. {company}")
+
 
 # 분석 설정
 col_year1, col_year2 = st.columns(2)
