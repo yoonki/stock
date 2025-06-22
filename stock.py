@@ -243,7 +243,7 @@ st.markdown("""
 - 10% 단위 구간, 손실=회색, 이익=파란색  
 - 각 막대 위에 비율(%) 표시, 이익/손실확률, CAGR 표시  
 - 아래에서 회사명/티커로 검색해 국내외 주식 동일 분석 가능
-- **NEW!** 📈 코스피와 비교 차트 및 상관관계 분석
+- **NEW!** 📈 코스피/S&P500 비교 차트 및 상관관계 분석
 """)
 
 # 기본 KOSPI
@@ -644,7 +644,6 @@ with st.expander(f"📊 {selected_market} 시장 정보", expanded=False):
     for i, company in enumerate(top_companies, 1):
         st.write(f"{i}. {company}")
 
-
 # 분석 설정
 col_year1, col_year2 = st.columns(2)
 with col_year1:
@@ -705,14 +704,50 @@ if auto_analyze_triggered or manual_analyze_clicked:
         with col4:
             st.metric("⚠️ 최저 수익률", f"{min_return:.2f}%", delta=f"{min_year}년")
 
-        # 4. 연도별 종가 추이 + 코스피 비교 차트
-        st.subheader("📊 연도별 종가 추이 (vs 코스피)")
+        # 4. 연도별 종가 추이 + 비교 지수 선택
+        st.subheader("📊 연도별 종가 추이 (vs 시장 지수)")
         
-        # 코스피 데이터도 같은 기간으로 가져오기
-        with st.spinner('코스피 비교 데이터를 불러오는 중입니다...'):
-            kospi_yearly_data, _ = get_korean_stock_data('KS11', int(start_year), int(end_year))
+        # 비교 지수 선택
+        col_index1, col_index2 = st.columns([1, 2])
         
-        if kospi_yearly_data is not None and not kospi_yearly_data.empty:
+        with col_index1:
+            # 선택된 시장에 따라 기본 비교 지수 설정
+            if selected_market == 'KRX':
+                default_index = 'KOSPI'
+                available_indices = ['KOSPI', 'S&P500']
+            else:
+                default_index = 'S&P500'
+                available_indices = ['S&P500', 'KOSPI']
+            
+            comparison_index = st.selectbox(
+                "비교 지수 선택",
+                available_indices,
+                index=available_indices.index(default_index),
+                format_func=lambda x: f"🇰🇷 {x}" if x == 'KOSPI' else f"🇺🇸 {x}",
+                key="comparison_index_select"
+            )
+        
+        with col_index2:
+            if comparison_index == 'KOSPI':
+                st.info("📈 **KOSPI** - 한국 종합주가지수 (Korea Composite Stock Price Index)")
+                st.caption("🏢 한국거래소 상장 주요 기업들의 시가총액 가중평균 지수")
+            else:
+                st.info("📈 **S&P500** - 미국 스탠더드앤푸어스 500 지수")
+                st.caption("🏢 미국 주요 500개 기업의 시가총액 가중평균 지수")
+        
+        # 지수별 티커 매핑
+        index_tickers = {
+            'KOSPI': 'KS11',
+            'S&P500': 'SPY'  # S&P500 ETF (SPY) 사용
+        }
+        
+        # 선택된 비교 지수 데이터 가져오기
+        comparison_ticker = index_tickers[comparison_index]
+        
+        with st.spinner(f'{comparison_index} 비교 데이터를 불러오는 중입니다...'):
+            comparison_yearly_data, _ = get_korean_stock_data(comparison_ticker, int(start_year), int(end_year))
+        
+        if comparison_yearly_data is not None and not comparison_yearly_data.empty:
             # 이중 축을 사용한 조합 차트 생성
             fig_combined = make_subplots(
                 specs=[[{"secondary_y": True}]]
@@ -722,6 +757,14 @@ if auto_analyze_triggered or manual_analyze_clicked:
             price_df = yearly_data.reset_index()
             price_df.columns = ['연도', '종가']
             
+            # 시장별 통화 단위 설정
+            if selected_market == 'KRX':
+                price_unit = '원'
+                price_format = ':,d'
+            else:
+                price_unit = '
+                price_format = ':,.2f'
+            
             fig_combined.add_trace(
                 go.Bar(
                     x=price_df['연도'], 
@@ -729,47 +772,59 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     name=f"{company_name}",
                     marker_color='rgba(68, 114, 196, 0.7)',
                     yaxis='y',
-                    hovertemplate=f'<b>{company_name}</b><br>연도: %{{x}}<br>종가: %{{y:,}}<extra></extra>'
+                    hovertemplate=f'<b>{company_name}</b><br>연도: %{{x}}<br>종가: %{{y{price_format}}}{price_unit}<extra></extra>'
                 ),
                 secondary_y=False
             )
             
-            # 코스피 데이터 (선그래프)
-            kospi_df = kospi_yearly_data.reset_index()
-            kospi_df.columns = ['연도', 'KOSPI']
+            # 비교 지수 데이터 (선그래프)
+            comparison_df = comparison_yearly_data.reset_index()
+            comparison_df.columns = ['연도', comparison_index]
+            
+            # 지수별 색상 설정
+            index_colors = {
+                'KOSPI': 'red',
+                'S&P500': 'green'
+            }
+            
+            index_color = index_colors.get(comparison_index, 'blue')
             
             fig_combined.add_trace(
                 go.Scatter(
-                    x=kospi_df['연도'], 
-                    y=kospi_df['KOSPI'],
+                    x=comparison_df['연도'], 
+                    y=comparison_df[comparison_index],
                     mode='lines+markers',
-                    name='KOSPI',
-                    line=dict(color='red', width=3),
-                    marker=dict(size=6, color='red'),
+                    name=comparison_index,
+                    line=dict(color=index_color, width=3),
+                    marker=dict(size=6, color=index_color),
                     yaxis='y2',
-                    hovertemplate='<b>KOSPI</b><br>연도: %{x}<br>지수: %{y:,}<extra></extra>'
+                    hovertemplate=f'<b>{comparison_index}</b><br>연도: %{{x}}<br>지수: %{{y:,.2f}}<extra></extra>'
                 ),
                 secondary_y=True
             )
             
             # 축 레이블 설정
             fig_combined.update_xaxes(title_text="연도")
+            
+            # 주식 가격 축 (왼쪽)
             fig_combined.update_yaxes(
-                title_text=f"{company_name} 주가", 
+                title_text=f"{company_name} 주가 ({price_unit})", 
                 secondary_y=False,
                 title_font_color="blue",
-                tickformat=',d'
+                tickformat=',d' if selected_market == 'KRX' else ',.2f'
             )
+            
+            # 비교 지수 축 (오른쪽)
             fig_combined.update_yaxes(
-                title_text="KOSPI 지수", 
+                title_text=f"{comparison_index} 지수", 
                 secondary_y=True,
-                title_font_color="red",
-                tickformat=',d'
+                title_font_color=index_color,
+                tickformat=',.2f'
             )
             
             # 레이아웃 설정
             fig_combined.update_layout(
-                title=f"📊 {company_name} vs KOSPI 연도별 추이 비교",
+                title=f"📊 {company_name} vs {comparison_index} 연도별 추이 비교",
                 template='plotly_white',
                 hovermode='x unified',
                 legend=dict(
@@ -785,32 +840,27 @@ if auto_analyze_triggered or manual_analyze_clicked:
             st.plotly_chart(fig_combined, use_container_width=True)
             
             # 5. 상관관계 분석
-            if len(yearly_data) == len(kospi_yearly_data):
-                correlation = yearly_data.corr(kospi_yearly_data)
+            if len(yearly_data) == len(comparison_yearly_data):
+                correlation = yearly_data.corr(comparison_yearly_data)
                 
                 col_corr1, col_corr2 = st.columns(2)
                 with col_corr1:
                     st.metric(
-                        "🔗 코스피와의 상관관계", 
+                        f"🔗 {comparison_index}와의 상관관계", 
                         f"{correlation:.3f}",
-                        help="1에 가까울수록 코스피와 동조화, -1에 가까울수록 반대 움직임"
+                        help=f"1에 가까울수록 {comparison_index}와 동조화, -1에 가까울수록 반대 움직임"
                     )
                 with col_corr2:
                     if correlation > 0.7:
-                        corr_desc = "높은 양의 상관관계 (시장과 강하게 동조화) 📈🤝"
-                        corr_color = "green"
+                        corr_desc = f"높은 양의 상관관계 ({comparison_index}와 강하게 동조화) 📈🤝"
                     elif correlation > 0.3:
-                        corr_desc = "보통 양의 상관관계 (시장과 어느 정도 동조화) 📈➡️"
-                        corr_color = "blue"
+                        corr_desc = f"보통 양의 상관관계 ({comparison_index}와 어느 정도 동조화) 📈➡️"
                     elif correlation > -0.3:
                         corr_desc = "낮은 상관관계 (독립적인 움직임) 🔄"
-                        corr_color = "orange"
                     elif correlation > -0.7:
-                        corr_desc = "보통 음의 상관관계 (시장과 반대 경향) 📉⬅️"
-                        corr_color = "purple"
+                        corr_desc = f"보통 음의 상관관계 ({comparison_index}와 반대 경향) 📉⬅️"
                     else:
-                        corr_desc = "높은 음의 상관관계 (시장과 강하게 반대) 📉🔄"
-                        corr_color = "red"
+                        corr_desc = f"높은 음의 상관관계 ({comparison_index}와 강하게 반대) 📉🔄"
                     
                     st.info(f"💡 **해석**: {corr_desc}")
                 
@@ -825,7 +875,7 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     
                     여기서:
                     - **x**: 개별 주식의 연도별 종가
-                    - **y**: 코스피 지수의 연도별 종가
+                    - **y**: 비교 지수의 연도별 종가
                     - **x̄, ȳ**: 각각의 평균값
                     - **n**: 관측 연도 수
                     """)
@@ -848,7 +898,7 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     
                     # 현재 분석 결과에 대한 구체적 설명
                     st.markdown(f"""
-                    ### 🎯 현재 분석 결과: {company_name}
+                    ### 🎯 현재 분석 결과: {company_name} vs {comparison_index}
                     
                     **상관계수**: {correlation:.3f}
                     
@@ -872,18 +922,37 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     
                     st.info(f"""
                     - **관계 강도**: {strength} {direction} 상관관계
-                    - **시장과의 관계**: {market_behavior} 움직임
+                    - **{comparison_index}와의 관계**: {market_behavior} 움직임
                     - **분산투자 효과**: {diversification}
-                    - **투자 전략**: {"시장 상승기에 유리" if correlation > 0.5 else "시장 하락기 헤지 효과" if correlation < -0.3 else "독립적 투자 가치"}
+                    - **투자 전략**: {f"{comparison_index} 상승기에 유리" if correlation > 0.5 else f"{comparison_index} 하락기 헤지 효과" if correlation < -0.3 else "독립적 투자 가치"}
                     """)
                     
-                    st.markdown("""
+                    # 지수별 특징 설명
+                    if comparison_index == 'KOSPI':
+                        st.markdown("""
+                        ### 🇰🇷 KOSPI 특징
+                        - **구성**: 한국거래소 상장 대형주 중심
+                        - **대표 종목**: 삼성전자, SK하이닉스, NAVER 등
+                        - **섹터**: IT, 금융, 화학, 자동차 등
+                        - **특징**: 한국 경제 전반을 대표하는 지수
+                        """)
+                    else:
+                        st.markdown("""
+                        ### 🇺🇸 S&P500 특징
+                        - **구성**: 미국 대형주 500개 기업
+                        - **대표 종목**: Apple, Microsoft, Google, Amazon 등
+                        - **섹터**: 기술, 금융, 헬스케어, 소비재 등
+                        - **특징**: 글로벌 경제를 대표하는 지수
+                        """)
+                    
+                    st.markdown(f"""
                     ### 💡 활용 방법
                     
                     1. **포트폴리오 구성**: 상관관계가 낮은 종목들을 조합하여 리스크 분산
-                    2. **시장 타이밍**: 높은 양의 상관관계 종목은 시장 상승기에 집중 투자
-                    3. **헤지 전략**: 음의 상관관계 종목으로 시장 하락 리스크 대비
-                    4. **장기 투자**: 상관관계는 시간에 따라 변하므로 정기적 재분석 필요
+                    2. **시장 타이밍**: 높은 양의 상관관계 종목은 {comparison_index} 상승기에 집중 투자
+                    3. **헤지 전략**: 음의 상관관계 종목으로 {comparison_index} 하락 리스크 대비
+                    4. **글로벌 분산**: KOSPI와 S&P500 비교로 국가별 시장 특성 파악
+                    5. **장기 투자**: 상관관계는 시간에 따라 변하므로 정기적 재분석 필요
                     """)
         else:
             # 비교 지수 데이터가 없을 때는 기존 차트만 표시
@@ -896,65 +965,6 @@ if auto_analyze_triggered or manual_analyze_clicked:
                 price_unit = '원'
             else:
                 price_unit = '
-        
-        # 6. 상세 데이터 테이블 (접기/펼치기)
-        with st.expander("📋 연도별 상세 데이터 보기"):
-            detail_df = pd.DataFrame({
-                '연도': yearly_data.index,
-                '종가': yearly_data.values,
-                '수익률(%)': ['-'] + [f"{x:.2f}%" for x in returns.values]
-            })
-            st.dataframe(detail_df, use_container_width=True)
-            
-            # CSV 다운로드 버튼
-            csv = detail_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 CSV로 다운로드",
-                data=csv,
-                file_name=f"{company_name}_{start_year}-{end_year}_분석결과.csv",
-                mime="text/csv"
-            )
-    else:
-        st.error(f"❌ '{company_name} ({ticker})' 데이터를 불러올 수 없습니다.")
-        st.info("💡 다른 종목을 선택해보시거나, 티커 심볼을 확인해주세요.")
-        
-        # 추천 종목 표시
-        st.subheader("🎯 추천 종목")
-        recommended = ["삼성전자 (005930) [KRX]", "SK하이닉스 (000660) [KRX]", "NAVER (035420) [KRX]", "카카오 (035720) [KRX]"]
-        cols = st.columns(len(recommended))
-        
-        for i, rec in enumerate(recommended):
-            with cols[i]:
-                if st.button(rec.split(' (')[0], key=f"rec_{i}"):
-                    st.session_state.selected_company = rec
-                    st.session_state.last_selectbox_value = rec
-                    company_name = rec.split('(')[0].strip()
-                    st.session_state.text_input_value = company_name
-                    st.session_state.last_textinput_value = company_name
-                    st.rerun()
-
-# Footer
-st.markdown("---")
-st.markdown("""
-### 📌 사용법 가이드
-- **selectbox**: 드롭다운에서 회사 선택 → 자동으로 입력창에 회사명 표시
-- **직접 입력**: 회사명이나 티커 입력 → 자동으로 해당 항목이 드롭다운에서 선택됨
-- **검색 결과**: 여러 후보가 있을 때 "선택" 버튼으로 바로 선택 가능
-- **분석 결과**: 수익률 분포, 코스피 비교, 상관관계까지 종합 분석
-
-### 🎯 주요 기능
-- ✅ **양방향 연동**: selectbox ↔ 직접입력 완전 동기화
-- ✅ **수익률 분포**: 연도별 수익률을 구간별로 시각화
-- ✅ **코스피 비교**: 개별 종목과 시장 지수 동시 비교
-- ✅ **상관관계 분석**: 시장과의 동조화 정도 수치화
-- ✅ **상세 데이터**: CSV 다운로드로 추가 분석 가능
-
-### ⚡ 개선사항
-- 🔄 **실시간 연동**: UI 요소간 즉시 반영
-- 📊 **이중 축 차트**: 스케일이 다른 데이터 동시 표시
-- 🎨 **개선된 시각화**: 손실/이익 경계선 최적화
-- 📈 **통계 분석**: 상관계수로 투자 인사이트 제공
-""")
             
             fig_price.update_layout(
                 title=f"{company_name} 연도별 종가 추이", 
@@ -1005,21 +1015,24 @@ st.markdown("""
 st.markdown("---")
 st.markdown("""
 ### 📌 사용법 가이드
-- **selectbox**: 드롭다운에서 회사 선택 → 자동으로 입력창에 회사명 표시
-- **직접 입력**: 회사명이나 티커 입력 → 자동으로 해당 항목이 드롭다운에서 선택됨
+- **거래소 선택**: 먼저 원하는 시장(KRX, NYSE, NASDAQ, AMEX) 선택
+- **종목 선택**: 해당 시장 내에서 회사 선택 → 자동 분석 실행
+- **직접 입력**: 회사명이나 티커 입력 → 자동으로 해당 항목이 선택됨
+- **비교 지수**: KOSPI 또는 S&P500과 비교 분석
 - **검색 결과**: 여러 후보가 있을 때 "선택" 버튼으로 바로 선택 가능
-- **분석 결과**: 수익률 분포, 코스피 비교, 상관관계까지 종합 분석
 
 ### 🎯 주요 기능
+- ✅ **시장별 분류**: 거래소별 체계적 종목 탐색
 - ✅ **양방향 연동**: selectbox ↔ 직접입력 완전 동기화
 - ✅ **수익률 분포**: 연도별 수익률을 구간별로 시각화
-- ✅ **코스피 비교**: 개별 종목과 시장 지수 동시 비교
+- ✅ **글로벌 비교**: KOSPI와 S&P500 중 선택하여 비교 분석
 - ✅ **상관관계 분석**: 시장과의 동조화 정도 수치화
 - ✅ **상세 데이터**: CSV 다운로드로 추가 분석 가능
 
 ### ⚡ 개선사항
+- 🌍 **시장별 필터링**: 원하는 거래소 집중 탐색
 - 🔄 **실시간 연동**: UI 요소간 즉시 반영
 - 📊 **이중 축 차트**: 스케일이 다른 데이터 동시 표시
 - 🎨 **개선된 시각화**: 손실/이익 경계선 최적화
-- 📈 **통계 분석**: 상관계수로 투자 인사이트 제공
+- 📈 **글로벌 분석**: 한국/미국 지수 선택적 비교
 """)
