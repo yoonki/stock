@@ -413,6 +413,9 @@ if 'last_selectbox_value' not in st.session_state:
 if 'last_textinput_value' not in st.session_state:
     st.session_state.last_textinput_value = st.session_state.text_input_value
 
+if 'auto_analyze' not in st.session_state:
+    st.session_state.auto_analyze = False
+
 # selectbox의 현재 인덱스 찾기
 try:
     current_index = company_options.index(st.session_state.selected_company)
@@ -445,6 +448,9 @@ if selected != st.session_state.last_selectbox_value:
         company_name = selected.split('(')[0].strip()
         st.session_state.text_input_value = company_name
         st.session_state.last_textinput_value = company_name
+        
+        # 자동 분석 트리거
+        st.session_state.auto_analyze = True
         st.rerun()
 
 # text_input 변경 감지 및 selectbox 업데이트
@@ -510,6 +516,9 @@ if user_input.strip() and len(user_input.strip()) >= 2:
                     company_name = option.split('(')[0].strip()
                     st.session_state.text_input_value = company_name
                     st.session_state.last_textinput_value = company_name
+                    
+                    # 자동 분석 트리거
+                    st.session_state.auto_analyze = True
                     st.rerun()
             with col2:
                 st.write(option)
@@ -521,13 +530,25 @@ with col_year1:
 with col_year2:
     end_year = st.number_input("종료 연도", min_value=start_year+1, max_value=datetime.today().year, value=datetime.today().year)
 
-# 현재 선택된 값으로 분석 실행
-if st.button("📊 분석하기", type="primary"):
+# 자동 분석 또는 수동 분석 실행
+auto_analyze_triggered = st.session_state.get('auto_analyze', False)
+manual_analyze_clicked = st.button("📊 분석하기", type="primary")
+
+# 자동 분석 플래그 리셋
+if auto_analyze_triggered:
+    st.session_state.auto_analyze = False
+
+# 분석 실행 조건
+if auto_analyze_triggered or manual_analyze_clicked:
     # 현재 선택된 회사 정보 사용
     current_selection = st.session_state.selected_company
     ticker, company_name = get_ticker_and_name(current_selection)
     
-    st.info(f"🎯 분석 대상: **{company_name}** ({ticker})")
+    # 자동 분석임을 표시
+    if auto_analyze_triggered:
+        st.success(f"🔄 자동 분석: **{company_name}** ({ticker}) 선택됨")
+    else:
+        st.info(f"🎯 분석 대상: **{company_name}** ({ticker})")
     
     with st.spinner('데이터를 불러오는 중입니다...'):
         yearly_data, returns = get_korean_stock_data(ticker, int(start_year), int(end_year))
