@@ -886,18 +886,84 @@ if auto_analyze_triggered or manual_analyze_clicked:
                     4. **장기 투자**: 상관관계는 시간에 따라 변하므로 정기적 재분석 필요
                     """)
         else:
-            # 코스피 데이터가 없을 때는 기존 차트만 표시
+            # 비교 지수 데이터가 없을 때는 기존 차트만 표시
             price_df = yearly_data.reset_index()
             price_df.columns = ['연도', '종가']
             fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
+            
+            # 시장별 통화 단위 설정
+            if selected_market == 'KRX':
+                price_unit = '원'
+            else:
+                price_unit = '
+        
+        # 6. 상세 데이터 테이블 (접기/펼치기)
+        with st.expander("📋 연도별 상세 데이터 보기"):
+            detail_df = pd.DataFrame({
+                '연도': yearly_data.index,
+                '종가': yearly_data.values,
+                '수익률(%)': ['-'] + [f"{x:.2f}%" for x in returns.values]
+            })
+            st.dataframe(detail_df, use_container_width=True)
+            
+            # CSV 다운로드 버튼
+            csv = detail_df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📥 CSV로 다운로드",
+                data=csv,
+                file_name=f"{company_name}_{start_year}-{end_year}_분석결과.csv",
+                mime="text/csv"
+            )
+    else:
+        st.error(f"❌ '{company_name} ({ticker})' 데이터를 불러올 수 없습니다.")
+        st.info("💡 다른 종목을 선택해보시거나, 티커 심볼을 확인해주세요.")
+        
+        # 추천 종목 표시
+        st.subheader("🎯 추천 종목")
+        recommended = ["삼성전자 (005930) [KRX]", "SK하이닉스 (000660) [KRX]", "NAVER (035420) [KRX]", "카카오 (035720) [KRX]"]
+        cols = st.columns(len(recommended))
+        
+        for i, rec in enumerate(recommended):
+            with cols[i]:
+                if st.button(rec.split(' (')[0], key=f"rec_{i}"):
+                    st.session_state.selected_company = rec
+                    st.session_state.last_selectbox_value = rec
+                    company_name = rec.split('(')[0].strip()
+                    st.session_state.text_input_value = company_name
+                    st.session_state.last_textinput_value = company_name
+                    st.rerun()
+
+# Footer
+st.markdown("---")
+st.markdown("""
+### 📌 사용법 가이드
+- **selectbox**: 드롭다운에서 회사 선택 → 자동으로 입력창에 회사명 표시
+- **직접 입력**: 회사명이나 티커 입력 → 자동으로 해당 항목이 드롭다운에서 선택됨
+- **검색 결과**: 여러 후보가 있을 때 "선택" 버튼으로 바로 선택 가능
+- **분석 결과**: 수익률 분포, 코스피 비교, 상관관계까지 종합 분석
+
+### 🎯 주요 기능
+- ✅ **양방향 연동**: selectbox ↔ 직접입력 완전 동기화
+- ✅ **수익률 분포**: 연도별 수익률을 구간별로 시각화
+- ✅ **코스피 비교**: 개별 종목과 시장 지수 동시 비교
+- ✅ **상관관계 분석**: 시장과의 동조화 정도 수치화
+- ✅ **상세 데이터**: CSV 다운로드로 추가 분석 가능
+
+### ⚡ 개선사항
+- 🔄 **실시간 연동**: UI 요소간 즉시 반영
+- 📊 **이중 축 차트**: 스케일이 다른 데이터 동시 표시
+- 🎨 **개선된 시각화**: 손실/이익 경계선 최적화
+- 📈 **통계 분석**: 상관계수로 투자 인사이트 제공
+""")
+            
             fig_price.update_layout(
                 title=f"{company_name} 연도별 종가 추이", 
                 xaxis_title='연도', 
-                yaxis_title='종가',
+                yaxis_title=f'종가 ({price_unit})',
                 template='plotly_white'
             )
             st.plotly_chart(fig_price, use_container_width=True)
-            st.warning("⚠️ 코스피 비교 데이터를 불러올 수 없어 개별 차트만 표시됩니다.")
+            st.warning(f"⚠️ {comparison_index} 비교 데이터를 불러올 수 없어 개별 차트만 표시됩니다.")
         
         # 6. 상세 데이터 테이블 (접기/펼치기)
         with st.expander("📋 연도별 상세 데이터 보기"):
