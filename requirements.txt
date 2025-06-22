@@ -1,6 +1,5 @@
-streamlit==1.32.2
-pandas==2.2.2
-plotly==5.21.0
-numpy==1.26.4
-FinanceDataReader==0.9.62
-requests>=2.25.1
+streamlit>=1.32.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+plotly>=5.15.0,<6.0.0
+numpy>=1.24.0,<2.0.0
+finance-datareader>=0.9.60
