@@ -14,54 +14,78 @@ import streamlit as st
 warnings.filterwarnings('ignore')
 
 # --- 회사명-티커 매핑 테이블 생성 (국내+해외) ---
-@st.cache_data
+@st.cache_data(ttl=3600)  # 1시간 캐시
 def get_all_stock_table():
-    # KRX
-    krx = fdr.StockListing('KRX')
-    krx = krx.rename(columns={'Code': 'Code', 'Name': 'Name'})
-    krx = krx[['Code', 'Name']].drop_duplicates()
-    krx = krx[krx['Code'].str.len() == 6]
-    krx['Market'] = 'KRX'
+    try:
+        # KRX 데이터 로딩
+        krx = fdr.StockListing('KRX')
+        krx = krx.rename(columns={'Code': 'Code', 'Name': 'Name'})
+        krx = krx[['Code', 'Name']].drop_duplicates()
+        krx = krx[krx['Code'].str.len() == 6]
+        krx['Market'] = 'KRX'
 
-    # 해외 거래소
-    all_dfs = [krx]
-    for market in ['NASDAQ', 'NYSE', 'AMEX']:
-        try:
-            df = fdr.StockListing(market)
-            # 컬럼명 표준화
-            if 'Symbol' in df.columns:
-                df = df.rename(columns={'Symbol': 'Code'})
-            if 'Name' not in df.columns and 'name' in df.columns:
-                df = df.rename(columns={'name': 'Name'})
-            if 'Code' in df.columns and 'Name' in df.columns:
-                df = df[['Code', 'Name']].drop_duplicates()
-                df['Market'] = market
-                all_dfs.append(df)
-        except Exception as e:
-            pass  # 해당 거래소 불러오기 실패시 무시
+        all_dfs = [krx]
+        
+        # 해외 거래소는 선택적으로 로딩
+        for market in ['NASDAQ', 'NYSE', 'AMEX']:
+            try:
+                df = fdr.StockListing(market)
+                if 'Symbol' in df.columns:
+                    df = df.rename(columns={'Symbol': 'Code'})
+                if 'Name' not in df.columns and 'name' in df.columns:
+                    df = df.rename(columns={'name': 'Name'})
+                if 'Code' in df.columns and 'Name' in df.columns:
+                    df = df[['Code', 'Name']].drop_duplicates()
+                    df['Market'] = market
+                    all_dfs.append(df)
+            except Exception as e:
+                st.warning(f"{market} 데이터 로딩 실패: {str(e)}")
+                continue
 
-    all_df = pd.concat(all_dfs, ignore_index=True)
-    return all_df
+        all_df = pd.concat(all_dfs, ignore_index=True)
+        return all_df
+    
+    except Exception as e:
+        st.error(f"주식 데이터 로딩 중 오류 발생: {str(e)}")
+        # 최소한 빈 DataFrame 반환
+        return pd.DataFrame(columns=['Code', 'Name', 'Market'])
 
-all_stock_table = get_all_stock_table()
-
-# 회사명(티커) 리스트 생성 (시장명도 함께)
-company_options = [f"{row.Name} ({row.Code}) [{row.Market}]" for row in all_stock_table.itertuples()]
-code_to_name = dict(zip(all_stock_table['Code'], all_stock_table['Name']))
-name_to_code = dict(zip(all_stock_table['Name'], all_stock_table['Code']))
-code_to_market = dict(zip(all_stock_table['Code'], all_stock_table['Market']))
+# 안전한 데이터 로딩
+try:
+    all_stock_table = get_all_stock_table()
+    if all_stock_table.empty:
+        st.error("주식 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
+        st.stop()
+        
+    company_options = [f"{row.Name} ({row.Code}) [{row.Market}]" for row in all_stock_table.itertuples()]
+    code_to_name = dict(zip(all_stock_table['Code'], all_stock_table['Name']))
+    name_to_code = dict(zip(all_stock_table['Name'], all_stock_table['Code']))
+    code_to_market = dict(zip(all_stock_table['Code'], all_stock_table['Market']))
+    
+except Exception as e:
+    st.error(f"애플리케이션 초기화 오류: {str(e)}")
+    st.stop()
 
 def get_korean_stock_data(ticker, start_year=1981, end_year=None):
-    if end_year is None:
-        end_year = datetime.today().year
-    start_date = f'{start_year}-01-01'
-    end_date = datetime.today().strftime('%Y-%m-%d')
-    data = fdr.DataReader(ticker, start_date, end_date)
-    if data.empty:
+    try:
+        if end_year is None:
+            end_year = datetime.today().year
+        start_date = f'{start_year}-01-01'
+        end_date = datetime.today().strftime('%Y-%m-%d')
+        
+        data = fdr.DataReader(ticker, start_date, end_date)
+        
+        if data is None or data.empty:
+            return None, None
+            
+        yearly_data = data.groupby(data.index.year)['Close'].last()
+        returns = yearly_data.pct_change().dropna() * 100
+        
+        return yearly_data, returns
+        
+    except Exception as e:
+        st.error(f"데이터 로딩 오류 ({ticker}): {str(e)}")
         return None, None
-    yearly_data = data.groupby(data.index.year)['Close'].last()
-    returns = yearly_data.pct_change().dropna() * 100
-    return yearly_data, returns
 
 def calculate_cagr(prices):
     if len(prices) < 2:
@@ -215,7 +239,9 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
                   '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~']
     colors = ['#808080' if i < 4 else '#4472C4' for i in range(len(bin_labels))]
 
-    yearly_data, returns = get_korean_stock_data('KS11', 1981)
+    with st.spinner('KOSPI 데이터를 불러오는 중입니다...'):
+        yearly_data, returns = get_korean_stock_data('KS11', 1981)
+    
     if returns is not None:
         fig = plot_return_histogram(returns, '연간', 'KOSPI', bins, bin_labels, colors)
         st.plotly_chart(fig, use_container_width=True)
@@ -223,75 +249,197 @@ with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
         price_df = yearly_data.reset_index()
         price_df.columns = ['연도', '종가']
         fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
-        fig_price.update_layout(title="KOSPI 연도별 종가(지수) 막대그래프", xaxis_title='연도', yaxis_title='종가(지수)')
+        fig_price.update_layout(
+            title="KOSPI 연도별 종가(지수) 막대그래프", 
+            xaxis_title='연도', 
+            yaxis_title='종가(지수)',
+            template='plotly_white'
+        )
         st.plotly_chart(fig_price, use_container_width=True)
     else:
         st.warning("KOSPI 데이터를 불러올 수 없습니다.")
 
-# 사용자 입력
+# 사용자 입력 부분
 st.header("다른 종목/지수 연 수익률 분포 보기")
 
-selected = st.selectbox("회사명 또는 티커를 선택/입력하세요", company_options, index=company_options.index("삼성전자 (005930) [KRX]") if "삼성전자 (005930) [KRX]" in company_options else 0)
-user_input = st.text_input("직접 입력(회사명, 티커, 회사명(티커) 모두 가능)", value="삼성전자")
+# 세션 상태 초기화
+if 'selected_company' not in st.session_state:
+    default_company = "삼성전자 (005930) [KRX]" if "삼성전자 (005930) [KRX]" in company_options else company_options[0]
+    st.session_state.selected_company = default_company
 
-# 유사 검색 결과 보여주기
+if 'text_input_value' not in st.session_state:
+    st.session_state.text_input_value = "삼성전자"
+
+if 'last_selectbox_value' not in st.session_state:
+    st.session_state.last_selectbox_value = st.session_state.selected_company
+
+if 'last_textinput_value' not in st.session_state:
+    st.session_state.last_textinput_value = st.session_state.text_input_value
+
+# selectbox의 현재 인덱스 찾기
+try:
+    current_index = company_options.index(st.session_state.selected_company)
+except (ValueError, IndexError):
+    current_index = 0
+    st.session_state.selected_company = company_options[0]
+
+# selectbox
+selected = st.selectbox(
+    "회사명 또는 티커를 선택하세요", 
+    company_options, 
+    index=current_index,
+    key="company_selectbox"
+)
+
+# text_input
+user_input = st.text_input(
+    "직접 입력 (회사명, 티커, 회사명(티커) 모두 가능)", 
+    value=st.session_state.text_input_value,
+    key="company_textinput"
+)
+
+# selectbox 변경 감지 및 text_input 업데이트
+if selected != st.session_state.last_selectbox_value:
+    st.session_state.last_selectbox_value = selected
+    st.session_state.selected_company = selected
+    
+    # selectbox에서 선택된 값을 파싱해서 회사명만 추출
+    if '(' in selected and ')' in selected:
+        company_name = selected.split('(')[0].strip()
+        st.session_state.text_input_value = company_name
+        st.session_state.last_textinput_value = company_name
+        st.rerun()
+
+# text_input 변경 감지 및 selectbox 업데이트
+if user_input != st.session_state.last_textinput_value:
+    st.session_state.last_textinput_value = user_input
+    st.session_state.text_input_value = user_input
+    
+    # text_input 값으로 매칭되는 옵션 찾기
+    if user_input.strip():
+        keyword = user_input.strip().lower()
+        
+        # 정확한 매치 우선 검색
+        exact_matches = [opt for opt in company_options if keyword in opt.lower()]
+        
+        if exact_matches:
+            # 가장 유사한 항목 선택 (회사명이나 티커가 정확히 일치하는 것 우선)
+            best_match = None
+            
+            # 1순위: 회사명이 정확히 일치
+            for opt in exact_matches:
+                company_part = opt.split('(')[0].strip().lower()
+                if company_part == keyword:
+                    best_match = opt
+                    break
+            
+            # 2순위: 티커가 정확히 일치
+            if not best_match:
+                for opt in exact_matches:
+                    if '(' in opt and ')' in opt:
+                        ticker_part = opt.split('(')[1].split(')')[0].strip().lower()
+                        if ticker_part == keyword:
+                            best_match = opt
+                            break
+            
+            # 3순위: 첫 번째 매치
+            if not best_match:
+                best_match = exact_matches[0]
+            
+            if best_match != st.session_state.selected_company:
+                st.session_state.selected_company = best_match
+                st.session_state.last_selectbox_value = best_match
+                st.rerun()
+
+# 유사 검색 결과 표시 (text_input에 값이 있을 때만)
 similar_options = []
-do_analysis = False
 if user_input.strip() and len(user_input.strip()) >= 2:
     keyword = user_input.strip().lower()
     similar_options = [opt for opt in company_options if keyword in opt.lower()]
-    if similar_options:
-        st.markdown(f"**유사 검색 결과:**")
-        similar_selected = st.selectbox("아래에서 선택하면 바로 분석됩니다", similar_options, key="similar_select")
-        # selectbox에서 선택하면 즉시 분석
-        ticker, company_name = get_ticker_and_name(similar_selected)
-        do_analysis = True
-    else:
-        do_analysis = False
-else:
-    do_analysis = False
+    
+    if similar_options and len(similar_options) > 1:  # 현재 선택된 것 외에 다른 옵션이 있을 때만 표시
+        st.markdown(f"**🔍 '{user_input}' 검색 결과 ({len(similar_options)}개):**")
+        
+        # 최대 10개까지만 표시
+        display_options = similar_options[:10]
+        
+        for i, option in enumerate(display_options):
+            col1, col2 = st.columns([0.1, 0.9])
+            with col1:
+                if st.button("선택", key=f"select_btn_{i}"):
+                    st.session_state.selected_company = option
+                    st.session_state.last_selectbox_value = option
+                    # 선택된 항목의 회사명을 text_input에 반영
+                    company_name = option.split('(')[0].strip()
+                    st.session_state.text_input_value = company_name
+                    st.session_state.last_textinput_value = company_name
+                    st.rerun()
+            with col2:
+                st.write(option)
 
-# selectbox에서 선택하면 자동 분석
-if not do_analysis and st.session_state.get('last_selected') != selected:
-    ticker, company_name = get_ticker_and_name(selected)
-    st.session_state['last_selected'] = selected
-    do_analysis = True
-
-# selectbox 우선, 직접입력값이 있으면 덮어씀 (유사 검색에서 선택하지 않은 경우)
-if not do_analysis:
-    if user_input.strip():
-        ticker, company_name = get_ticker_and_name(user_input.strip())
-    else:
-        ticker, company_name = get_ticker_and_name(selected)
-
+# 분석 실행
 start_year = st.number_input("시작 연도", min_value=1981, max_value=datetime.today().year-1, value=2000)
 end_year = st.number_input("종료 연도", min_value=start_year+1, max_value=datetime.today().year, value=datetime.today().year)
 
-if (not similar_options and do_analysis) or (similar_options and do_analysis) or (not similar_options and st.button("분석하기")):
-    yearly_data, returns = get_korean_stock_data(ticker, int(start_year), int(end_year))
-    if returns is not None:
+# 현재 선택된 값으로 분석 실행
+if st.button("📊 분석하기", type="primary"):
+    # 현재 선택된 회사 정보 사용
+    current_selection = st.session_state.selected_company
+    ticker, company_name = get_ticker_and_name(current_selection)
+    
+    st.info(f"분석 대상: {company_name} ({ticker})")
+    
+    with st.spinner('데이터를 불러오는 중입니다...'):
+        yearly_data, returns = get_korean_stock_data(ticker, int(start_year), int(end_year))
+    
+    if returns is not None and not returns.empty:
         fig = plot_return_histogram(returns, '연간', company_name, bins, bin_labels, colors)
         st.plotly_chart(fig, use_container_width=True)
         
         # 상승/하락 연도 계산 및 표기
         up_years = returns[returns > 0].index.tolist()
         down_years = returns[returns <= 0].index.tolist()
-        st.markdown(f"**상승 연도 수:** {len(up_years)}  |  **하락 연도 수:** {len(down_years)}")
-        st.markdown(f"**상승 연도:** {', '.join(map(str, up_years)) if up_years else '-'}")
-        st.markdown(f"**하락 연도:** {', '.join(map(str, down_years)) if down_years else '-'}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("상승 연도 수", len(up_years))
+            st.caption(f"상승 연도: {', '.join(map(str, up_years)) if up_years else '없음'}")
+        with col2:
+            st.metric("하락 연도 수", len(down_years))
+            st.caption(f"하락 연도: {', '.join(map(str, down_years)) if down_years else '없음'}")
 
         # 최고/최저 수익률 및 연도
         max_return = returns.max()
         min_return = returns.min()
         max_year = returns.idxmax() if not returns.empty else '-'
         min_year = returns.idxmin() if not returns.empty else '-'
-        st.markdown(f"**최고 수익률:** {max_return:.2f}% ({max_year})  |  **최저 수익률:** {min_return:.2f}% ({min_year})")
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            st.metric("최고 수익률", f"{max_return:.2f}%", delta=f"{max_year}년")
+        with col4:
+            st.metric("최저 수익률", f"{min_return:.2f}%", delta=f"{min_year}년")
 
         # 실제 연도별 종가(지수/주가) 막대그래프 추가
         price_df = yearly_data.reset_index()
         price_df.columns = ['연도', '종가']
         fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
-        fig_price.update_layout(title=f"{company_name} 연도별 종가(지수/주가) 막대그래프", xaxis_title='연도', yaxis_title='종가(지수/주가)')
+        fig_price.update_layout(
+            title=f"{company_name} 연도별 종가 추이", 
+            xaxis_title='연도', 
+            yaxis_title='종가',
+            template='plotly_white'
+        )
         st.plotly_chart(fig_price, use_container_width=True)
+        
+        # 상세 데이터 테이블 (접기/펼치기)
+        with st.expander("📈 연도별 상세 데이터 보기"):
+            detail_df = pd.DataFrame({
+                '연도': yearly_data.index,
+                '종가': yearly_data.values,
+                '수익률(%)': ['-'] + [f"{x:.2f}%" for x in returns.values]
+            })
+            st.dataframe(detail_df, use_container_width=True)
     else:
-        st.warning("해당 티커의 데이터를 불러올 수 없습니다.")
+        st.error(f"❌ '{company_name} ({ticker})' 데이터를 불러올 수 없습니다.")
+        st.info("💡 다른 종목을 선택해보시거나, 티커 심볼을 확인해주세요.")
