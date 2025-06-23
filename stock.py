@@ -1,959 +1,806 @@
-# 커스텀 가능한 한국 주식 수익률 분포 히스토그램 함수
-# FinanceDataReader + Pandas + Plotly 활용
-# 코스피 비교 차트 및 양방향 연동 UI 포함
-
+import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
+import yfinance as yf
+import numpy as np
 from datetime import datetime, timedelta
 import warnings
-import streamlit as st
-
 warnings.filterwarnings('ignore')
 
-# --- 회사명-티커 매핑 테이블 생성 (국내+해외) ---
-@st.cache_data(ttl=3600)  # 1시간 캐시
-def get_all_stock_table():
-    try:
-        # KRX 데이터 로딩
-        krx = fdr.StockListing('KRX')
-        krx = krx.rename(columns={'Code': 'Code', 'Name': 'Name'})
-        krx = krx[['Code', 'Name']].drop_duplicates()
-        krx = krx[krx['Code'].str.len() == 6]
-        krx['Market'] = 'KRX'
+# 페이지 설정
+st.set_page_config(
+    page_title="📊 주식 투자 분석 도구",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-        all_dfs = [krx]
-        
-        # 해외 거래소는 선택적으로 로딩
-        for market in ['NASDAQ', 'NYSE', 'AMEX']:
-            try:
-                df = fdr.StockListing(market)
-                if 'Symbol' in df.columns:
-                    df = df.rename(columns={'Symbol': 'Code'})
-                if 'Name' not in df.columns and 'name' in df.columns:
-                    df = df.rename(columns={'name': 'Name'})
-                if 'Code' in df.columns and 'Name' in df.columns:
-                    df = df[['Code', 'Name']].drop_duplicates()
-                    df['Market'] = market
-                    all_dfs.append(df)
-            except Exception as e:
-                st.warning(f"{market} 데이터 로딩 실패: {str(e)}")
-                continue
+# CSS 스타일링
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 5px solid #1f77b4;
+        margin: 0.5rem 0;
+    }
+    .success-metric {
+        border-left-color: #28a745;
+    }
+    .danger-metric {
+        border-left-color: #dc3545;
+    }
+    .warning-metric {
+        border-left-color: #ffc107;
+    }
+    .info-box {
+        background-color: #e7f3ff;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #2196F3;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-        all_df = pd.concat(all_dfs, ignore_index=True)
-        return all_df
+# 제목
+st.markdown('<div class="main-header">📊 주식 투자 분석 도구</div>', unsafe_allow_html=True)
+
+# 사이드바 설정
+st.sidebar.title("📋 분석 설정")
+
+# 국내/해외 선택
+market_type = st.sidebar.selectbox(
+    "🌍 시장 선택",
+    ["국내 (한국)", "해외 (미국)"]
+)
+
+# 종목 선택/입력
+if market_type == "국내 (한국)":
+    st.sidebar.subheader("🇰🇷 국내 주식")
     
-    except Exception as e:
-        st.error(f"주식 데이터 로딩 중 오류 발생: {str(e)}")
-        # 최소한 빈 DataFrame 반환
-        return pd.DataFrame(columns=['Code', 'Name', 'Market'])
-
-# 안전한 데이터 로딩
-try:
-    all_stock_table = get_all_stock_table()
-    if all_stock_table.empty:
-        st.error("주식 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
-        st.stop()
-        
-    company_options = [f"{row.Name} ({row.Code}) [{row.Market}]" for row in all_stock_table.itertuples()]
-    code_to_name = dict(zip(all_stock_table['Code'], all_stock_table['Name']))
-    name_to_code = dict(zip(all_stock_table['Name'], all_stock_table['Code']))
-    code_to_market = dict(zip(all_stock_table['Code'], all_stock_table['Market']))
+    # 인기 종목 리스트
+    popular_stocks_kr = {
+        "삼성전자": "005930",
+        "SK하이닉스": "000660", 
+        "NAVER": "035420",
+        "카카오": "035720",
+        "LG화학": "051910",
+        "현대차": "005380",
+        "KB금융": "105560",
+        "셀트리온": "068270",
+        "POSCO홀딩스": "005490",
+        "LG전자": "066570",
+        "삼성바이오로직스": "207940",
+        "기아": "000270",
+        "SK텔레콤": "017670",
+        "LG생활건강": "051900",
+        "삼성SDI": "006400"
+    }
     
-except Exception as e:
-    st.error(f"애플리케이션 초기화 오류: {str(e)}")
-    st.stop()
+    stock_input_type = st.sidebar.radio(
+        "종목 선택 방법",
+        ["인기 종목에서 선택", "직접 입력"]
+    )
+    
+    if stock_input_type == "인기 종목에서 선택":
+        selected_stock_name = st.sidebar.selectbox(
+            "종목 선택",
+            list(popular_stocks_kr.keys())
+        )
+        stock_code = popular_stocks_kr[selected_stock_name]
+        stock_symbol = stock_code
+    else:
+        stock_code = st.sidebar.text_input(
+            "종목 코드 입력 (예: 005930)",
+            placeholder="6자리 숫자"
+        )
+        stock_symbol = stock_code
+        selected_stock_name = stock_code if stock_code else ""
+        
+else:  # 해외 (미국)
+    st.sidebar.subheader("🇺🇸 해외 주식")
+    
+    # 인기 종목 리스트
+    popular_stocks_us = {
+        "Apple": "AAPL",
+        "Microsoft": "MSFT",
+        "Google": "GOOGL",
+        "Amazon": "AMZN",
+        "Tesla": "TSLA",
+        "NVIDIA": "NVDA",
+        "Meta": "META",
+        "Netflix": "NFLX",
+        "AMD": "AMD",
+        "Intel": "INTC",
+        "Berkshire Hathaway": "BRK-B",
+        "Johnson & Johnson": "JNJ",
+        "JPMorgan Chase": "JPM",
+        "Visa": "V",
+        "Procter & Gamble": "PG"
+    }
+    
+    stock_input_type = st.sidebar.radio(
+        "종목 선택 방법",
+        ["인기 종목에서 선택", "직접 입력"]
+    )
+    
+    if stock_input_type == "인기 종목에서 선택":
+        selected_stock_name = st.sidebar.selectbox(
+            "종목 선택",
+            list(popular_stocks_us.keys())
+        )
+        stock_symbol = popular_stocks_us[selected_stock_name]
+    else:
+        stock_symbol = st.sidebar.text_input(
+            "종목 심볼 입력 (예: AAPL)",
+            placeholder="영문 심볼"
+        ).upper()
+        selected_stock_name = stock_symbol
 
-def get_korean_stock_data(ticker, start_year=1981, end_year=None):
+# 기간 선택
+period_options = {
+    "1개월": 30,
+    "3개월": 90,
+    "6개월": 180,
+    "1년": 365,
+    "2년": 730,
+    "3년": 1095
+}
+
+selected_period = st.sidebar.selectbox(
+    "📅 분석 기간",
+    list(period_options.keys()),
+    index=3  # 기본값: 1년
+)
+
+# 분석 시작 버튼
+analyze_button = st.sidebar.button("🔍 분석 시작", type="primary")
+
+# 투자 지표 계산 함수들
+def calculate_returns(prices):
+    """수익률 계산"""
+    return prices.pct_change().dropna()
+
+def calculate_cumulative_returns(returns):
+    """누적 수익률 계산"""
+    return (1 + returns).cumprod() - 1
+
+def calculate_volatility(returns, periods=252):
+    """변동성 계산 (연환산)"""
+    return returns.std() * np.sqrt(periods)
+
+def calculate_sharpe_ratio(returns, risk_free_rate=0.03, periods=252):
+    """샤프 비율 계산"""
+    annual_return = returns.mean() * periods
+    volatility = calculate_volatility(returns, periods)
+    return (annual_return - risk_free_rate) / volatility if volatility != 0 else 0
+
+def calculate_max_drawdown(returns):
+    """최대 낙폭 계산"""
+    cumulative = calculate_cumulative_returns(returns)
+    running_max = cumulative.expanding().max()
+    drawdown = cumulative - running_max
+    return drawdown.min()
+
+def calculate_var(returns, confidence_level=0.05):
+    """Value at Risk 계산"""
+    return np.percentile(returns, confidence_level * 100)
+
+def get_stock_data(symbol, start_date, end_date, market_type):
+    """주식 데이터 가져오기"""
     try:
-        if end_year is None:
-            end_year = datetime.today().year
-        start_date = f'{start_year}-01-01'
-        end_date = datetime.today().strftime('%Y-%m-%d')
-        
-        data = fdr.DataReader(ticker, start_date, end_date)
-        
-        if data is None or data.empty:
-            return None, None
+        if market_type == "국내 (한국)":
+            # finance-datareader 사용 (국내)
+            df = fdr.DataReader(symbol, start_date, end_date)
+            currency = "원"
+        else:
+            # yfinance 사용 (해외)
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(start=start_date, end=end_date)
+            currency = "달러"
             
-        yearly_data = data.groupby(data.index.year)['Close'].last()
-        returns = yearly_data.pct_change().dropna() * 100
-        
-        return yearly_data, returns
-        
+        return df, currency
     except Exception as e:
-        st.error(f"데이터 로딩 오류 ({ticker}): {str(e)}")
+        st.error(f"데이터 가져오기 실패: {str(e)}")
         return None, None
 
-def calculate_cagr(prices):
-    if len(prices) < 2:
-        return np.nan
-    start_price = prices.iloc[0]
-    end_price = prices.iloc[-1]
-    n = len(prices) - 1
-    return (end_price / start_price) ** (1 / n) - 1
-
-def plot_return_histogram(returns, period_label, ticker_name, bins, bin_labels, colors):
-    total_count = len(returns)
-    positive_count = (returns > 0).sum()
-    negative_count = (returns <= 0).sum()
-    avg_return = returns.mean()
-    cagr = calculate_cagr(returns.add(100).div(100).cumprod())
-    positive_pct = (positive_count / total_count) * 100
-    negative_pct = (negative_count / total_count) * 100
-    max_return = returns.max()
-    min_return = returns.min()
-    max_year = returns.idxmax() if not returns.empty else '-'
-    min_year = returns.idxmin() if not returns.empty else '-'
-
-    hist_data = pd.cut(returns, bins=bins, labels=bin_labels, right=False)
-    hist_counts = hist_data.value_counts().sort_index()
-    hist_percentages = (hist_counts / total_count) * 100
-
-    # 제목 아래에 표시할 통계 텍스트
-    subtitle = f"연 평균 정상률 (CAGR): {cagr*100:.2f}%  |  이익 확률: {positive_pct:.1f}%  |  손실 확률: {negative_pct:.1f}%  |  최고: {max_return:.2f}%({max_year})  |  최저: {min_return:.2f}%({min_year})"
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=bin_labels,
-        y=hist_percentages,
-        marker_color=colors,
-        text=[f'{pct:.1f}%' if pct > 0 else '' for pct in hist_percentages],
-        textposition='outside',
-        showlegend=False,
-        customdata=[hist_counts.get(label, 0) for label in bin_labels],
-        hovertemplate='구간: %{x}<br>비율: %{y:.1f}%<br>횟수: %{customdata}회<extra></extra>',
-    ))
-
-    # annotation에서 <br/> 제거 및 확률만 남김
-    # 손실 확률
-    fig.add_annotation(
-        x=1.5, y=max(hist_percentages) * 0.85,
-        text=f"손실 확률: {negative_pct:.1f}%",
-        showarrow=False,
-        font=dict(size=14, color='black'),
-        align='center'
-    )
-    # 이익 확률
-    fig.add_annotation(
-        x=len(bin_labels) * 0.7, y=max(hist_percentages) * 0.85,
-        text=f"이익 확률: {positive_pct:.1f}%",
-        showarrow=False,
-        font=dict(size=14, color='black'),
-        align='center'
-    )
-    # 제목 아래에 subtitle 표시 (annotation으로)
-    fig.add_annotation(
-        text=subtitle,
-        xref='paper', yref='paper',
-        x=0.5, y=1.08, showarrow=False,
-        font=dict(size=15, color='black'),
-        align='center'
-    )
-
-    # 손실/이익 경계선: 0%가 포함된 bin의 왼쪽 경계에 vline
-    zero_bin_idx = None
-    for i in range(len(bins)-1):
-        if bins[i] <= 0 < bins[i+1]:
-            zero_bin_idx = i
-            break
-    if zero_bin_idx is not None:
-        fig.add_vline(
-            x=zero_bin_idx - 0.5,  # 해당 bin의 왼쪽 경계
-            line_dash="dash",
-            line_color="black",
-            line_width=2
-        )
-        # 경계선 텍스트를 선 위에 배치
-        fig.add_annotation(
-            x=zero_bin_idx - 0.5,
-            y=max(hist_percentages) * 0.5,  # 차트 중간 높이에 배치
-            text="손실/이익 경계",
-            showarrow=False,
-            font=dict(size=12, color='black'),
-            textangle=-90,  # 텍스트를 세로로 회전
-            align='center',
-            bgcolor="white",  # 배경색 추가로 가독성 향상
-            bordercolor="black",
-            borderwidth=1
-        )
-
-    fig.update_layout(
-        title={
-            'text': f'{ticker_name} 연 수익률 분포',
-            'x': 0.5,
-            'font': {'size': 18, 'color': 'black'}
-        },
-        xaxis_title='연 수익률 구간(%)',
-        yaxis_title='발생 빈도(%)',
-        template='plotly_white',
-        width=1000,
-        height=600,
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=100, b=100)
-    )
-    fig.update_xaxes(
-        tickangle=0,
-        tickfont=dict(size=11),
-        showgrid=False,
-        showline=True,
-        linecolor='black'
-    )
-    fig.update_yaxes(
-        tickfont=dict(size=11),
-        showgrid=True,
-        gridcolor='lightgray',
-        gridwidth=1,
-        showline=True,
-        linecolor='black',
-        ticksuffix='%'
-    )
-    return fig
-
-def get_ticker_and_name(user_input):
-    # 입력값이 (시장)까지 포함된 경우
-    if '[' in user_input and ']' in user_input:
-        # 예: Apple Inc. (AAPL) [NASDAQ]
-        code = user_input.split('(')[-1].split(')')[0].strip()
-        name = user_input.split('(')[0].strip()
-        return code, name
-    # 입력값이 6자리 숫자면 티커로 간주
-    if user_input in code_to_name:
-        return user_input, code_to_name[user_input]
-    # 입력값이 회사명이면
-    elif user_input in name_to_code:
-        return name_to_code[user_input], user_input
-    # 회사명(티커) 형태면
-    elif '(' in user_input and ')' in user_input:
-        name = user_input.split('(')[0].strip()
-        code = user_input.split('(')[-1].replace(')','').strip()
-        return code, name
-    else:
-        return user_input, user_input  # fallback
-
-# Streamlit UI
-st.title("📊 한국/해외 주식 연 수익률 분포 히스토그램")
-
-st.markdown("""
-- **KOSPI 1981~오늘까지 연 수익률 분포**  
-- 10% 단위 구간, 손실=회색, 이익=파란색  
-- 각 막대 위에 비율(%) 표시, 이익/손실확률, CAGR 표시  
-- 아래에서 회사명/티커로 검색해 국내외 주식 동일 분석 가능
-- **NEW!** 📈 코스피와 비교 차트 및 상관관계 분석
-""")
-
-# 기본 KOSPI
-with st.expander("KOSPI 연 수익률 분포 (1981~오늘)", expanded=True):
-    bins = [-100, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-    bin_labels = ['~-30', '-30~-20', '-20~-10', '-10~0', '0~10', '10~20', 
-                  '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~']
-    colors = ['#808080' if i < 4 else '#4472C4' for i in range(len(bin_labels))]
-
-    with st.spinner('KOSPI 데이터를 불러오는 중입니다...'):
-        yearly_data, returns = get_korean_stock_data('KS11', 1981)
-    
-    if returns is not None:
-        fig = plot_return_histogram(returns, '연간', 'KOSPI', bins, bin_labels, colors)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # KOSPI 수익률 분포 상세 설명
-        with st.expander("📚 KOSPI 연 수익률 분포 상세 분석", expanded=False):
-            st.markdown("""
-            ### 📊 KOSPI 연 수익률 분포 해석 가이드
+# 메인 화면
+if analyze_button and stock_symbol:
+    try:
+        # 로딩 메시지
+        with st.spinner(f"📊 {selected_stock_name} 데이터를 불러오는 중..."):
             
-            위의 히스토그램은 1981년부터 현재까지 **KOSPI 지수의 연간 수익률 분포**를 보여줍니다.
+            # 데이터 가져오기
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=period_options[selected_period])
             
-            #### 🔍 그래프 읽는 방법
+            df, currency = get_stock_data(stock_symbol, start_date, end_date, market_type)
             
-            **1. X축 (수익률 구간)**: 연간 수익률을 10% 단위로 구분
-            - 예: "10~20" = 연간 수익률이 10% 이상 20% 미만인 구간
-            
-            **2. Y축 (발생 빈도)**: 해당 구간에 속한 연도의 비율(%)
-            - 예: "20%" = 전체 기간 중 20%의 연도가 해당 구간에 속함
-            
-            **3. 색상 구분**:
-            - 🔴 **회색**: 손실 구간 (음수 수익률)
-            - 🔵 **파란색**: 이익 구간 (양수 수익률)
-            
-            **4. 손실/이익 경계선**: 0% 지점에 점선으로 표시
-            """)
-            
-            # 실제 KOSPI 통계 계산 (returns가 있을 때)
-            if returns is not None and not returns.empty:
-                kospi_stats = {
-                    'total_years': len(returns),
-                    'positive_years': (returns > 0).sum(),
-                    'negative_years': (returns <= 0).sum(),
-                    'positive_pct': (returns > 0).mean() * 100,
-                    'negative_pct': (returns <= 0).mean() * 100,
-                    'avg_return': returns.mean(),
-                    'std_return': returns.std(),
-                    'max_return': returns.max(),
-                    'min_return': returns.min(),
-                    'max_year': returns.idxmax(),
-                    'min_year': returns.idxmin()
-                }
+            if df is None or df.empty:
+                st.error("❌ 데이터를 찾을 수 없습니다. 종목 코드/심볼을 확인해주세요.")
+                st.info("💡 **팁**: 국내 주식은 6자리 숫자 (예: 005930), 해외 주식은 영문 심볼 (예: AAPL)을 입력하세요.")
+            else:
+                # 데이터 전처리
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
                 
-                st.markdown(f"""
-                #### 📈 KOSPI 역사적 수익률 통계 (1981~현재)
+                # 컬럼명 통일
+                if 'Adj Close' in df.columns:
+                    df['Close'] = df['Adj Close']
                 
-                **기본 통계**:
-                - 📅 **분석 기간**: {kospi_stats['total_years']}년간 ({returns.index.min()}~{returns.index.max()})
-                - 📊 **평균 연 수익률**: {kospi_stats['avg_return']:.2f}%
-                - 📏 **변동성 (표준편차)**: {kospi_stats['std_return']:.2f}%
+                # 기본 정보 표시
+                st.success(f"✅ {selected_stock_name} 데이터 로드 완료! ({len(df)}일간 데이터)")
                 
-                **수익/손실 확률**:
-                - ✅ **상승 확률**: {kospi_stats['positive_pct']:.1f}% ({kospi_stats['positive_years']}년)
-                - ❌ **하락 확률**: {kospi_stats['negative_pct']:.1f}% ({kospi_stats['negative_years']}년)
+                # 탭 생성
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 주가 차트", "📊 수익률 분석", "📋 주요 지표", "📉 리스크 분석", "💡 투자 분석"])
                 
-                **극값 기록**:
-                - 🏆 **최고 수익률**: {kospi_stats['max_return']:.2f}% ({kospi_stats['max_year']}년)
-                - ⚠️ **최저 수익률**: {kospi_stats['min_return']:.2f}% ({kospi_stats['min_year']}년)
-                """)
-                
-                # 구간별 분석
-                hist_data = pd.cut(returns, bins=bins, labels=bin_labels, right=False)
-                hist_counts = hist_data.value_counts().sort_index()
-                hist_percentages = (hist_counts / len(returns)) * 100
-                
-                st.markdown("#### 🎯 구간별 상세 분석")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**손실 구간 분석** 🔴")
-                    loss_bins = [label for label in bin_labels if any(char in label for char in ['-', '~-'])]
-                    loss_total = sum(hist_percentages.get(label, 0) for label in loss_bins if label in hist_percentages.index)
+                with tab1:
+                    st.subheader("📈 주가 차트")
                     
-                    for label in loss_bins:
-                        if label in hist_percentages.index and hist_percentages[label] > 0:
-                            st.write(f"- **{label}%**: {hist_percentages[label]:.1f}% ({hist_counts[label]}년)")
-                    
-                    st.info(f"💡 **총 손실 확률**: {loss_total:.1f}%")
-                
-                with col2:
-                    st.markdown("**이익 구간 분석** 🔵")
-                    profit_bins = [label for label in bin_labels if not any(char in label for char in ['-']) or label.startswith('0~')]
-                    profit_total = sum(hist_percentages.get(label, 0) for label in profit_bins if label in hist_percentages.index)
-                    
-                    for label in profit_bins:
-                        if label in hist_percentages.index and hist_percentages[label] > 0:
-                            st.write(f"- **{label}%**: {hist_percentages[label]:.1f}% ({hist_counts[label]}년)")
-                    
-                    st.success(f"💡 **총 이익 확률**: {profit_total:.1f}%")
-                
-                # 투자 시사점
-                st.markdown("""
-                #### 💰 투자 시사점
-                
-                **1. 장기 투자 관점**:
-                - KOSPI는 장기적으로 상승 편향을 보임 (상승 확률 > 하락 확률)
-                - 연평균 수익률이 양수로, 장기 보유 시 수익 가능성 높음
-                
-                **2. 리스크 관리**:
-                - 변동성이 존재하므로 단기 투자는 신중히 접근
-                - 극단적 손실/이익 구간의 빈도를 참고하여 리스크 관리
-                
-                **3. 분산 투자**:
-                - 개별 종목의 상관관계를 고려한 포트폴리오 구성
-                - 시장 지수와 다른 움직임을 보이는 자산 혼합
-                
-                **4. 타이밍 전략**:
-                - 역사적 패턴을 참고하되, 과거 성과가 미래를 보장하지 않음
-                - 정기적 투자(Dollar Cost Averaging) 고려
-                """)
-            
-            st.markdown("""
-            #### 📚 추가 학습 자료
-            
-            **관련 개념**:
-            - **변동성**: 수익률의 표준편차로 측정되는 가격 변동 정도
-            - **샤프 비율**: 위험 대비 수익률을 나타내는 지표
-            - **최대 낙폭**: 최고점에서 최저점까지의 최대 하락폭
-            - **베타**: 시장 대비 개별 종목의 민감도
-            
-            **활용 방법**:
-            1. 개별 종목 분석 시 KOSPI와 비교하여 상대적 성과 평가
-            2. 포트폴리오 구성 시 시장 위험도 참고 자료로 활용
-            3. 투자 목표 수익률 설정 시 현실적 기준점으로 활용
-            """)
-        
-        # 코스피 연도별 종가 막대그래프
-        price_df = yearly_data.reset_index()
-        price_df.columns = ['연도', '종가']
-        fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
-        fig_price.update_layout(
-            title="KOSPI 연도별 종가(지수) 막대그래프", 
-            xaxis_title='연도', 
-            yaxis_title='종가(지수)',
-            template='plotly_white'
-        )
-        st.plotly_chart(fig_price, use_container_width=True)
-    else:
-        st.warning("KOSPI 데이터를 불러올 수 없습니다.")
-
-# 사용자 입력 부분
-st.header("🔍 다른 종목/지수 연 수익률 분포 보기")
-
-# 세션 상태 초기화
-if 'selected_market' not in st.session_state:
-    st.session_state.selected_market = 'KRX'
-
-if 'selected_company' not in st.session_state:
-    default_company = "삼성전자 (005930) [KRX]" if "삼성전자 (005930) [KRX]" in company_options else company_options[0]
-    st.session_state.selected_company = default_company
-
-if 'text_input_value' not in st.session_state:
-    st.session_state.text_input_value = "삼성전자"
-
-if 'last_selectbox_value' not in st.session_state:
-    st.session_state.last_selectbox_value = st.session_state.selected_company
-
-if 'last_textinput_value' not in st.session_state:
-    st.session_state.last_textinput_value = st.session_state.text_input_value
-
-if 'auto_analyze' not in st.session_state:
-    st.session_state.auto_analyze = False
-
-# 시장별 회사 옵션 생성
-market_list = sorted(all_stock_table['Market'].unique())
-market_companies = {}
-
-for market in market_list:
-    market_data = all_stock_table[all_stock_table['Market'] == market]
-    market_companies[market] = [f"{row.Name} ({row.Code})" for row in market_data.itertuples()]
-
-# 시장 아이콘 매핑
-market_icons = {
-    'KRX': '🇰🇷',
-    'NASDAQ': '🇺🇸',
-    'NYSE': '🇺🇸', 
-    'AMEX': '🇺🇸'
-}
-
-# 시장 설명 매핑
-market_descriptions = {
-    'KRX': '한국거래소 (Korean Exchange)',
-    'NASDAQ': '나스닥 (National Association of Securities Dealers Automated Quotations)',
-    'NYSE': '뉴욕증권거래소 (New York Stock Exchange)',
-    'AMEX': '아메리칸증권거래소 (American Stock Exchange)'
-}
-
-# 1단계: 시장 선택
-st.subheader("1️⃣ 거래소/시장 선택")
-
-col_market1, col_market2 = st.columns([1, 2])
-
-with col_market1:
-    selected_market = st.selectbox(
-        "거래소를 선택하세요",
-        market_list,
-        index=market_list.index(st.session_state.selected_market) if st.session_state.selected_market in market_list else 0,
-        format_func=lambda x: f"{market_icons.get(x, '🌍')} {x}",
-        key="market_selectbox"
-    )
-
-with col_market2:
-    if selected_market in market_descriptions:
-        st.info(f"📍 **{market_descriptions[selected_market]}**")
-        
-        # 시장별 통계 정보
-        market_count = len(market_companies.get(selected_market, []))
-        st.caption(f"📊 등록 종목 수: **{market_count:,}개**")
-
-# 시장 변경 감지
-if selected_market != st.session_state.selected_market:
-    st.session_state.selected_market = selected_market
-    # 시장이 변경되면 해당 시장의 첫 번째 회사로 초기화
-    if selected_market in market_companies and market_companies[selected_market]:
-        first_company = market_companies[selected_market][0]
-        st.session_state.selected_company = f"{first_company} [{selected_market}]"
-        st.session_state.last_selectbox_value = st.session_state.selected_company
-        # 회사명만 추출해서 text_input에 반영
-        company_name = first_company.split(' (')[0]
-        st.session_state.text_input_value = company_name
-        st.session_state.last_textinput_value = company_name
-    st.rerun()
-
-# 2단계: 회사 선택
-st.subheader(f"2️⃣ {market_icons.get(selected_market, '🌍')} {selected_market} 종목 선택")
-
-# 현재 선택된 시장의 회사 옵션
-current_market_options = market_companies.get(selected_market, [])
-
-if not current_market_options:
-    st.warning(f"⚠️ {selected_market} 시장의 데이터를 불러올 수 없습니다.")
-    st.stop()
-
-# selectbox의 현재 인덱스 찾기 (시장 정보 제거 후 비교)
-current_company_without_market = st.session_state.selected_company.split(' [')[0] if ' [' in st.session_state.selected_company else st.session_state.selected_company
-
-try:
-    current_index = current_market_options.index(current_company_without_market)
-except (ValueError, IndexError):
-    current_index = 0
-    if current_market_options:
-        st.session_state.selected_company = f"{current_market_options[0]} [{selected_market}]"
-
-# selectbox
-selected = st.selectbox(
-    f"회사명 또는 티커를 선택하세요 ({len(current_market_options):,}개 종목)",
-    current_market_options,
-    index=current_index,
-    key="company_selectbox"
-)
-
-# text_input
-user_input = st.text_input(
-    f"직접 입력 ({selected_market} 시장 내 검색)",
-    value=st.session_state.text_input_value,
-    key="company_textinput",
-    help=f"{selected_market} 시장에서 회사명이나 티커로 검색하세요"
-)
-
-# selectbox 변경 감지 및 text_input 업데이트
-selected_with_market = f"{selected} [{selected_market}]"
-
-if selected_with_market != st.session_state.last_selectbox_value:
-    st.session_state.last_selectbox_value = selected_with_market
-    st.session_state.selected_company = selected_with_market
-    
-    # selectbox에서 선택된 값을 파싱해서 회사명만 추출
-    if '(' in selected and ')' in selected:
-        company_name = selected.split('(')[0].strip()
-        st.session_state.text_input_value = company_name
-        st.session_state.last_textinput_value = company_name
-        
-        # 자동 분석 트리거
-        st.session_state.auto_analyze = True
-        st.rerun()
-
-# text_input 변경 감지 및 selectbox 업데이트
-if user_input != st.session_state.last_textinput_value:
-    st.session_state.last_textinput_value = user_input
-    st.session_state.text_input_value = user_input
-    
-    # text_input 값으로 현재 시장 내에서 매칭되는 옵션 찾기
-    if user_input.strip():
-        keyword = user_input.strip().lower()
-        
-        # 현재 시장 내에서만 검색
-        exact_matches = [opt for opt in current_market_options if keyword in opt.lower()]
-        
-        if exact_matches:
-            # 가장 유사한 항목 선택 (회사명이나 티커가 정확히 일치하는 것 우선)
-            best_match = None
-            
-            # 1순위: 회사명이 정확히 일치
-            for opt in exact_matches:
-                company_part = opt.split('(')[0].strip().lower()
-                if company_part == keyword:
-                    best_match = opt
-                    break
-            
-            # 2순위: 티커가 정확히 일치
-            if not best_match:
-                for opt in exact_matches:
-                    if '(' in opt and ')' in opt:
-                        ticker_part = opt.split('(')[1].split(')')[0].strip().lower()
-                        if ticker_part == keyword:
-                            best_match = opt
-                            break
-            
-            # 3순위: 첫 번째 매치
-            if not best_match:
-                best_match = exact_matches[0]
-            
-            best_match_with_market = f"{best_match} [{selected_market}]"
-            if best_match_with_market != st.session_state.selected_company:
-                st.session_state.selected_company = best_match_with_market
-                st.session_state.last_selectbox_value = best_match_with_market
-                st.rerun()
-
-# 유사 검색 결과 표시 (현재 시장 내에서만)
-similar_options = []
-if user_input.strip() and len(user_input.strip()) >= 2:
-    keyword = user_input.strip().lower()
-    similar_options = [opt for opt in current_market_options if keyword in opt.lower()]
-    
-    if similar_options and len(similar_options) > 1:  # 현재 선택된 것 외에 다른 옵션이 있을 때만 표시
-        st.markdown(f"**🔍 '{user_input}' 검색 결과 ({len(similar_options)}개) - {market_icons.get(selected_market, '🌍')} {selected_market}:**")
-        
-        # 최대 10개까지만 표시
-        display_options = similar_options[:10]
-        
-        for i, option in enumerate(display_options):
-            col1, col2 = st.columns([0.1, 0.9])
-            with col1:
-                if st.button("선택", key=f"select_btn_{i}"):
-                    option_with_market = f"{option} [{selected_market}]"
-                    st.session_state.selected_company = option_with_market
-                    st.session_state.last_selectbox_value = option_with_market
-                    # 선택된 항목의 회사명을 text_input에 반영
-                    company_name = option.split('(')[0].strip()
-                    st.session_state.text_input_value = company_name
-                    st.session_state.last_textinput_value = company_name
-                    
-                    # 자동 분석 트리거
-                    st.session_state.auto_analyze = True
-                    st.rerun()
-            with col2:
-                st.write(f"{market_icons.get(selected_market, '🌍')} {option}")
-
-# 시장 정보 표시 (선택적)
-with st.expander(f"📊 {selected_market} 시장 정보", expanded=False):
-    if selected_market == 'KRX':
-        st.markdown("""
-        **🇰🇷 한국거래소 (KRX)**
-        - **설립**: 2005년 (KOSPI, KOSDAQ, KONEX 통합)
-        - **주요 지수**: KOSPI 200, KOSDAQ 150
-        - **거래시간**: 09:00 - 15:30 (KST)
-        - **특징**: 아시아 주요 거래소, 삼성전자 등 대형주 상장
-        """)
-    elif selected_market == 'NYSE':
-        st.markdown("""
-        **🇺🇸 뉴욕증권거래소 (NYSE)**
-        - **설립**: 1792년
-        - **세계 최대**: 시가총액 기준 세계 1위 거래소
-        - **거래시간**: 09:30 - 16:00 (EST)
-        - **특징**: Apple, Microsoft 등 글로벌 대기업 상장
-        """)
-    elif selected_market == 'NASDAQ':
-        st.markdown("""
-        **🇺🇸 나스닥 (NASDAQ)**
-        - **설립**: 1971년
-        - **전자거래**: 세계 최초 전자 증권거래소
-        - **거래시간**: 09:30 - 16:00 (EST)
-        - **특징**: 기술주 중심, Google, Amazon, Tesla 상장
-        """)
-    elif selected_market == 'AMEX':
-        st.markdown("""
-        **🇺🇸 아메리칸증권거래소 (AMEX)**
-        - **설립**: 1971년 (현재는 NYSE American)
-        - **거래시간**: 09:30 - 16:00 (EST)
-        - **특징**: 중소형주, ETF 중심
-        """)
-    
-    # 현재 시장의 상위 종목들 (가나다순으로 처음 5개)
-    top_companies = current_market_options[:5]
-    st.markdown(f"**🏆 주요 상장 종목 (일부)**:")
-    for i, company in enumerate(top_companies, 1):
-        st.write(f"{i}. {company}")
-
-
-# 분석 설정
-col_year1, col_year2 = st.columns(2)
-with col_year1:
-    start_year = st.number_input("시작 연도", min_value=1981, max_value=datetime.today().year-1, value=2000)
-with col_year2:
-    end_year = st.number_input("종료 연도", min_value=start_year+1, max_value=datetime.today().year, value=datetime.today().year)
-
-# 자동 분석 또는 수동 분석 실행
-auto_analyze_triggered = st.session_state.get('auto_analyze', False)
-manual_analyze_clicked = st.button("📊 분석하기", type="primary")
-
-# 자동 분석 플래그 리셋
-if auto_analyze_triggered:
-    st.session_state.auto_analyze = False
-
-# 분석 실행 조건
-if auto_analyze_triggered or manual_analyze_clicked:
-    # 현재 선택된 회사 정보 사용
-    current_selection = st.session_state.selected_company
-    ticker, company_name = get_ticker_and_name(current_selection)
-    
-    # 자동 분석임을 표시
-    if auto_analyze_triggered:
-        st.success(f"🔄 자동 분석: **{company_name}** ({ticker}) 선택됨")
-    else:
-        st.info(f"🎯 분석 대상: **{company_name}** ({ticker})")
-    
-    with st.spinner('데이터를 불러오는 중입니다...'):
-        yearly_data, returns = get_korean_stock_data(ticker, int(start_year), int(end_year))
-    
-    if returns is not None and not returns.empty:
-        # 1. 수익률 분포 히스토그램
-        st.subheader("📈 연 수익률 분포")
-        fig = plot_return_histogram(returns, '연간', company_name, bins, bin_labels, colors)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # 2. 상승/하락 연도 통계
-        up_years = returns[returns > 0].index.tolist()
-        down_years = returns[returns <= 0].index.tolist()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("📈 상승 연도 수", len(up_years))
-            st.caption(f"상승 연도: {', '.join(map(str, up_years)) if up_years else '없음'}")
-        with col2:
-            st.metric("📉 하락 연도 수", len(down_years))
-            st.caption(f"하락 연도: {', '.join(map(str, down_years)) if down_years else '없음'}")
-
-        # 3. 최고/최저 수익률
-        max_return = returns.max()
-        min_return = returns.min()
-        max_year = returns.idxmax() if not returns.empty else '-'
-        min_year = returns.idxmin() if not returns.empty else '-'
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            st.metric("🏆 최고 수익률", f"{max_return:.2f}%", delta=f"{max_year}년")
-        with col4:
-            st.metric("⚠️ 최저 수익률", f"{min_return:.2f}%", delta=f"{min_year}년")
-
-        # 4. 연도별 종가 추이 + 코스피 비교 차트
-        st.subheader("📊 연도별 종가 추이 (vs 코스피)")
-        
-        # 코스피 데이터도 같은 기간으로 가져오기
-        with st.spinner('코스피 비교 데이터를 불러오는 중입니다...'):
-            kospi_yearly_data, _ = get_korean_stock_data('KS11', int(start_year), int(end_year))
-        
-        if kospi_yearly_data is not None and not kospi_yearly_data.empty:
-            # 이중 축을 사용한 조합 차트 생성
-            fig_combined = make_subplots(
-                specs=[[{"secondary_y": True}]]
-            )
-            
-            # 개별 주식 데이터 (막대그래프)
-            price_df = yearly_data.reset_index()
-            price_df.columns = ['연도', '종가']
-            
-            fig_combined.add_trace(
-                go.Bar(
-                    x=price_df['연도'], 
-                    y=price_df['종가'], 
-                    name=f"{company_name}",
-                    marker_color='rgba(68, 114, 196, 0.7)',
-                    yaxis='y',
-                    hovertemplate=f'<b>{company_name}</b><br>연도: %{{x}}<br>종가: %{{y:,}}<extra></extra>'
-                ),
-                secondary_y=False
-            )
-            
-            # 코스피 데이터 (선그래프)
-            kospi_df = kospi_yearly_data.reset_index()
-            kospi_df.columns = ['연도', 'KOSPI']
-            
-            fig_combined.add_trace(
-                go.Scatter(
-                    x=kospi_df['연도'], 
-                    y=kospi_df['KOSPI'],
-                    mode='lines+markers',
-                    name='KOSPI',
-                    line=dict(color='red', width=3),
-                    marker=dict(size=6, color='red'),
-                    yaxis='y2',
-                    hovertemplate='<b>KOSPI</b><br>연도: %{x}<br>지수: %{y:,}<extra></extra>'
-                ),
-                secondary_y=True
-            )
-            
-            # 축 레이블 설정
-            fig_combined.update_xaxes(title_text="연도")
-            fig_combined.update_yaxes(
-                title_text=f"{company_name} 주가", 
-                secondary_y=False,
-                title_font_color="blue",
-                tickformat=',d'
-            )
-            fig_combined.update_yaxes(
-                title_text="KOSPI 지수", 
-                secondary_y=True,
-                title_font_color="red",
-                tickformat=',d'
-            )
-            
-            # 레이아웃 설정
-            fig_combined.update_layout(
-                title=f"📊 {company_name} vs KOSPI 연도별 추이 비교",
-                template='plotly_white',
-                hovermode='x unified',
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                ),
-                height=500
-            )
-            
-            st.plotly_chart(fig_combined, use_container_width=True)
-            
-            # 5. 상관관계 분석
-            if len(yearly_data) == len(kospi_yearly_data):
-                correlation = yearly_data.corr(kospi_yearly_data)
-                
-                col_corr1, col_corr2 = st.columns(2)
-                with col_corr1:
-                    st.metric(
-                        "🔗 코스피와의 상관관계", 
-                        f"{correlation:.3f}",
-                        help="1에 가까울수록 코스피와 동조화, -1에 가까울수록 반대 움직임"
+                    # 캔들스틱 차트
+                    fig = make_subplots(
+                        rows=2, cols=1,
+                        subplot_titles=('주가', '거래량'),
+                        vertical_spacing=0.1,
+                        row_heights=[0.7, 0.3]
                     )
-                with col_corr2:
-                    if correlation > 0.7:
-                        corr_desc = "높은 양의 상관관계 (시장과 강하게 동조화) 📈🤝"
-                        corr_color = "green"
-                    elif correlation > 0.3:
-                        corr_desc = "보통 양의 상관관계 (시장과 어느 정도 동조화) 📈➡️"
-                        corr_color = "blue"
-                    elif correlation > -0.3:
-                        corr_desc = "낮은 상관관계 (독립적인 움직임) 🔄"
-                        corr_color = "orange"
-                    elif correlation > -0.7:
-                        corr_desc = "보통 음의 상관관계 (시장과 반대 경향) 📉⬅️"
-                        corr_color = "purple"
-                    else:
-                        corr_desc = "높은 음의 상관관계 (시장과 강하게 반대) 📉🔄"
-                        corr_color = "red"
                     
-                    st.info(f"💡 **해석**: {corr_desc}")
+                    # 캔들스틱
+                    fig.add_trace(
+                        go.Candlestick(
+                            x=df.index,
+                            open=df['Open'],
+                            high=df['High'],
+                            low=df['Low'],
+                            close=df['Close'],
+                            name='주가',
+                            increasing_line_color='red',
+                            decreasing_line_color='blue'
+                        ),
+                        row=1, col=1
+                    )
+                    
+                    # 이동평균선 추가
+                    if len(df) >= 20:
+                        ma20 = df['Close'].rolling(window=20).mean()
+                        fig.add_trace(
+                            go.Scatter(
+                                x=df.index,
+                                y=ma20,
+                                mode='lines',
+                                name='20일 이평선',
+                                line=dict(color='orange', width=1)
+                            ),
+                            row=1, col=1
+                        )
+                    
+                    if len(df) >= 60:
+                        ma60 = df['Close'].rolling(window=60).mean()
+                        fig.add_trace(
+                            go.Scatter(
+                                x=df.index,
+                                y=ma60,
+                                mode='lines',
+                                name='60일 이평선',
+                                line=dict(color='purple', width=1)
+                            ),
+                            row=1, col=1
+                        )
+                    
+                    # 거래량
+                    colors = ['red' if close >= open else 'blue' 
+                             for close, open in zip(df['Close'], df['Open'])]
+                    
+                    fig.add_trace(
+                        go.Bar(
+                            x=df.index,
+                            y=df['Volume'],
+                            name='거래량',
+                            marker_color=colors,
+                            opacity=0.7
+                        ),
+                        row=2, col=1
+                    )
+                    
+                    fig.update_layout(
+                        title=f"{selected_stock_name} 주가 차트",
+                        height=600,
+                        xaxis_rangeslider_visible=False,
+                        showlegend=True
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 현재 주가 정보
+                    current_price = df['Close'].iloc[-1]
+                    prev_price = df['Close'].iloc[-2] if len(df) > 1 else current_price
+                    change = current_price - prev_price
+                    change_pct = (change / prev_price) * 100
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric(
+                            "현재가", 
+                            f"{current_price:,.0f} {currency}",
+                            delta=f"{change:+.0f} ({change_pct:+.2f}%)"
+                        )
+                    with col2:
+                        high_52w = df['High'].max()
+                        st.metric("최고가", f"{high_52w:,.0f} {currency}")
+                    with col3:
+                        low_52w = df['Low'].min()
+                        st.metric("최저가", f"{low_52w:,.0f} {currency}")
+                    with col4:
+                        avg_volume = df['Volume'].mean()
+                        st.metric("평균 거래량", f"{avg_volume:,.0f}")
                 
-                # 상관관계 계산식 및 상세 설명
-                with st.expander("📚 상관관계 분석 상세 설명", expanded=False):
-                    st.markdown("""
-                    ### 🧮 피어슨 상관계수 계산식
+                with tab2:
+                    st.subheader("📊 수익률 분석")
                     
-                    상관계수 r은 다음 공식으로 계산됩니다:
+                    # 수익률 계산
+                    returns = calculate_returns(df['Close'])
+                    cumulative_returns = calculate_cumulative_returns(returns)
                     
-                    $r = \\frac{\\sum_{i=1}^{n}(x_i - \\bar{x})(y_i - \\bar{y})}{\\sqrt{\\sum_{i=1}^{n}(x_i - \\bar{x})^2 \\sum_{i=1}^{n}(y_i - \\bar{y})^2}}$
+                    col1, col2 = st.columns(2)
                     
-                    여기서:
-                    - **x**: 개별 주식의 연도별 종가
-                    - **y**: 코스피 지수의 연도별 종가
-                    - **x̄, ȳ**: 각각의 평균값
-                    - **n**: 관측 연도 수
-                    """)
+                    with col1:
+                        # 누적 수익률 차트
+                        fig_returns = go.Figure()
+                        fig_returns.add_trace(
+                            go.Scatter(
+                                x=cumulative_returns.index,
+                                y=cumulative_returns * 100,
+                                mode='lines',
+                                name='누적 수익률',
+                                line=dict(color='green', width=2),
+                                fill='tonexty'
+                            )
+                        )
+                        
+                        fig_returns.update_layout(
+                            title="누적 수익률 (%)",
+                            xaxis_title="날짜",
+                            yaxis_title="수익률 (%)",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_returns, use_container_width=True)
                     
-                    st.markdown("""
-                    ### 📊 상관계수 해석 가이드
+                    with col2:
+                        # 수익률 히스토그램
+                        fig_hist = px.histogram(
+                            returns * 100, 
+                            nbins=50,
+                            title="일일 수익률 분포",
+                            labels={'value': '일일 수익률 (%)', 'count': '빈도'}
+                        )
+                        fig_hist.update_layout(height=400)
+                        st.plotly_chart(fig_hist, use_container_width=True)
                     
-                    | 상관계수 범위 | 해석 | 투자 의미 |
-                    |--------------|------|-----------|
-                    | **0.8 ~ 1.0** | 매우 강한 양의 상관관계 | 시장과 거의 동일하게 움직임, 분산투자 효과 낮음 |
-                    | **0.6 ~ 0.8** | 강한 양의 상관관계 | 시장과 대체로 동조, 시장 상승기에 유리 |
-                    | **0.4 ~ 0.6** | 보통 양의 상관관계 | 시장과 어느 정도 연관, 적절한 분산 효과 |
-                    | **0.2 ~ 0.4** | 약한 양의 상관관계 | 시장과 약간 연관, 좋은 분산투자 대상 |
-                    | **-0.2 ~ 0.2** | 무관계 | 시장과 독립적 움직임, 훌륭한 분산투자 효과 |
-                    | **-0.4 ~ -0.2** | 약한 음의 상관관계 | 시장과 약간 반대, 헤지 효과 있음 |
-                    | **-0.6 ~ -0.4** | 보통 음의 상관관계 | 시장과 반대 경향, 좋은 헤지 수단 |
-                    | **-0.8 ~ -0.6** | 강한 음의 상관관계 | 시장과 강하게 반대, 우수한 헤지 효과 |
-                    | **-1.0 ~ -0.8** | 매우 강한 음의 상관관계 | 시장과 정반대, 완벽한 헤지 수단 |
-                    """)
+                    # 수익률 통계
+                    st.markdown("### 📈 수익률 통계")
+                    col1, col2, col3 = st.columns(3)
                     
-                    # 현재 분석 결과에 대한 구체적 설명
+                    with col1:
+                        daily_return_mean = returns.mean() * 100
+                        st.metric("평균 일일 수익률", f"{daily_return_mean:.3f}%")
+                    
+                    with col2:
+                        daily_return_std = returns.std() * 100
+                        st.metric("일일 수익률 표준편차", f"{daily_return_std:.3f}%")
+                    
+                    with col3:
+                        positive_days = (returns > 0).sum()
+                        total_days = len(returns)
+                        win_rate = (positive_days / total_days) * 100
+                        st.metric("상승일 비율", f"{win_rate:.1f}%")
+                
+                with tab3:
+                    st.subheader("📋 주요 투자 지표")
+                    
+                    # 수익률 계산
+                    total_return = (current_price / df['Close'].iloc[0] - 1) * 100
+                    
+                    # 연환산 수익률
+                    days = len(df)
+                    annual_return = ((current_price / df['Close'].iloc[0]) ** (365/days) - 1) * 100
+                    
+                    # 변동성 (연환산)
+                    volatility = calculate_volatility(returns) * 100
+                    
+                    # 샤프 비율
+                    sharpe_ratio = calculate_sharpe_ratio(returns)
+                    
+                    # 최대 낙폭 (MDD)
+                    max_drawdown = calculate_max_drawdown(returns) * 100
+                    
+                    # 지표 표시
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("### 📈 수익률 지표")
+                        st.markdown(f"""
+                        <div class="metric-card {'success-metric' if total_return > 0 else 'danger-metric'}">
+                            <h4>총 수익률</h4>
+                            <h3>{total_return:+.2f}%</h3>
+                            <p>{selected_period} 동안의 누적 수익률</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.markdown(f"""
+                        <div class="metric-card {'success-metric' if annual_return > 0 else 'danger-metric'}">
+                            <h4>연환산 수익률</h4>
+                            <h3>{annual_return:+.2f}%</h3>
+                            <p>연간 예상 수익률</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown("### ⚠️ 리스크 지표")
+                        volatility_class = "success-metric" if volatility < 20 else "warning-metric" if volatility < 30 else "danger-metric"
+                        volatility_desc = "안정적" if volatility < 20 else "보통" if volatility < 30 else "높음"
+                        
+                        st.markdown(f"""
+                        <div class="metric-card {volatility_class}">
+                            <h4>변동성 (연환산)</h4>
+                            <h3>{volatility:.2f}%</h3>
+                            <p>위험도: {volatility_desc}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        mdd_class = "success-metric" if max_drawdown > -10 else "warning-metric" if max_drawdown > -20 else "danger-metric"
+                        mdd_desc = "양호" if max_drawdown > -10 else "주의" if max_drawdown > -20 else "위험"
+                        
+                        st.markdown(f"""
+                        <div class="metric-card {mdd_class}">
+                            <h4>최대 낙폭 (MDD)</h4>
+                            <h3>{max_drawdown:.2f}%</h3>
+                            <p>위험도: {mdd_desc}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # 샤프 비율
+                    st.markdown("### 🎯 위험 조정 수익률")
+                    sharpe_color = "success-metric" if sharpe_ratio > 1 else "warning-metric" if sharpe_ratio > 0 else "danger-metric"
+                    sharpe_grade = "우수" if sharpe_ratio > 1 else "보통" if sharpe_ratio > 0 else "부족"
+                    
                     st.markdown(f"""
-                    ### 🎯 현재 분석 결과: {company_name}
+                    <div class="metric-card {sharpe_color}">
+                        <h4>샤프 비율</h4>
+                        <h3>{sharpe_ratio:.2f}</h3>
+                        <p>위험 대비 수익률: {sharpe_grade}</p>
+                        <small>1.0 이상: 우수, 0~1.0: 보통, 0 미만: 부족</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with tab4:
+                    st.subheader("📉 리스크 분석")
                     
-                    **상관계수**: {correlation:.3f}
+                    # VaR 계산
+                    var_95 = calculate_var(returns, 0.05) * 100
+                    var_99 = calculate_var(returns, 0.01) * 100
                     
-                    **분석**:
-                    """)
+                    col1, col2 = st.columns(2)
                     
-                    if abs(correlation) >= 0.7:
-                        strength = "강한"
-                        diversification = "낮음" if correlation > 0 else "높음"
-                        market_behavior = "동조화" if correlation > 0 else "반대"
-                    elif abs(correlation) >= 0.4:
-                        strength = "보통"
-                        diversification = "보통"
-                        market_behavior = "부분 동조화" if correlation > 0 else "부분 반대"
+                    with col1:
+                        st.markdown("### 💰 Value at Risk (VaR)")
+                        st.markdown(f"""
+                        <div class="metric-card danger-metric">
+                            <h4>VaR (95%)</h4>
+                            <h3>{var_95:.2f}%</h3>
+                            <p>95% 확률로 하루 손실이 이 값을 넘지 않음</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.markdown(f"""
+                        <div class="metric-card danger-metric">
+                            <h4>VaR (99%)</h4>
+                            <h3>{var_99:.2f}%</h3>
+                            <p>99% 확률로 하루 손실이 이 값을 넘지 않음</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # 위험도 설명
+                        st.markdown("""
+                        <div class="info-box">
+                            <h4>💡 VaR 해석</h4>
+                            <p>• VaR이 -3% 이하면 위험도가 높은 종목</p>
+                            <p>• VaR이 -1% 이상이면 비교적 안정적인 종목</p>
+                            <p>• 투자 전 본인의 손실 감수 능력을 고려하세요</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        # 드로우다운 차트
+                        cumulative_max = cumulative_returns.expanding().max()
+                        drawdown = cumulative_returns - cumulative_max
+                        
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(
+                            go.Scatter(
+                                x=drawdown.index,
+                                y=drawdown * 100,
+                                mode='lines',
+                                fill='tonexty',
+                                name='드로우다운',
+                                line=dict(color='red'),
+                                fillcolor='rgba(255,0,0,0.3)'
+                            )
+                        )
+                        
+                        fig_dd.update_layout(
+                            title="드로우다운 차트",
+                            xaxis_title="날짜",
+                            yaxis_title="드로우다운 (%)",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                        
+                        # 드로우다운 통계
+                        max_dd_duration = 0
+                        current_dd_duration = 0
+                        peak = cumulative_returns.iloc[0]
+                        
+                        for i, val in enumerate(cumulative_returns):
+                            if val >= peak:
+                                peak = val
+                                current_dd_duration = 0
+                            else:
+                                current_dd_duration += 1
+                                max_dd_duration = max(max_dd_duration, current_dd_duration)
+                        
+                        st.metric("최대 하락 지속일", f"{max_dd_duration}일")
+                
+                with tab5:
+                    st.subheader("💡 종합 투자 분석")
+                    
+                    # 종합 점수 계산
+                    score = 0
+                    analysis_points = []
+                    
+                    # 수익률 평가
+                    if total_return > 20:
+                        score += 2
+                        analysis_points.append("✅ 높은 수익률을 기록하고 있습니다.")
+                    elif total_return > 0:
+                        score += 1
+                        analysis_points.append("📈 플러스 수익률을 유지하고 있습니다.")
                     else:
-                        strength = "약한"
-                        diversification = "높음"
-                        market_behavior = "독립적"
+                        analysis_points.append("📉 현재 손실 상태입니다. 신중한 판단이 필요합니다.")
                     
-                    direction = "양의" if correlation > 0 else "음의" if correlation < 0 else "무"
+                    # 변동성 평가
+                    if volatility < 15:
+                        score += 2
+                        analysis_points.append("✅ 변동성이 낮아 안정적인 투자처입니다.")
+                    elif volatility < 25:
+                        score += 1
+                        analysis_points.append("⚖️ 적당한 변동성을 보이고 있습니다.")
+                    else:
+                        analysis_points.append("⚠️ 높은 변동성으로 위험도가 큽니다.")
                     
-                    st.info(f"""
-                    - **관계 강도**: {strength} {direction} 상관관계
-                    - **시장과의 관계**: {market_behavior} 움직임
-                    - **분산투자 효과**: {diversification}
-                    - **투자 전략**: {"시장 상승기에 유리" if correlation > 0.5 else "시장 하락기 헤지 효과" if correlation < -0.3 else "독립적 투자 가치"}
-                    """)
+                    # 샤프 비율 평가
+                    if sharpe_ratio > 1.5:
+                        score += 2
+                        analysis_points.append("✅ 위험 대비 수익률이 매우 우수합니다.")
+                    elif sharpe_ratio > 0.5:
+                        score += 1
+                        analysis_points.append("📊 위험 대비 수익률이 양호합니다.")
+                    else:
+                        analysis_points.append("⚠️ 위험 대비 수익률이 부족합니다.")
                     
+                    # MDD 평가
+                    if max_drawdown > -10:
+                        score += 2
+                        analysis_points.append("✅ 낙폭이 적어 심리적 부담이 적습니다.")
+                    elif max_drawdown > -20:
+                        score += 1
+                        analysis_points.append("⚖️ 적당한 수준의 낙폭을 보입니다.")
+                    else:
+                        analysis_points.append("⚠️ 큰 낙폭으로 심리적 부담이 클 수 있습니다.")
+                    
+                    # 종합 평가
+                    if score >= 7:
+                        grade = "A"
+                        grade_color = "success-metric"
+                        recommendation = "매우 좋은 투자처로 평가됩니다."
+                    elif score >= 5:
+                        grade = "B"
+                        grade_color = "warning-metric"
+                        recommendation = "양호한 투자처로 평가됩니다."
+                    elif score >= 3:
+                        grade = "C"
+                        grade_color = "warning-metric"
+                        recommendation = "보통 수준의 투자처입니다."
+                    else:
+                        grade = "D"
+                        grade_color = "danger-metric"
+                        recommendation = "신중한 접근이 필요한 투자처입니다."
+                    
+                    # 결과 표시
+                    col1, col2 = st.columns([1, 2])
+                    
+                    with col1:
+                        st.markdown(f"""
+                        <div class="metric-card {grade_color}">
+                            <h4>종합 평가</h4>
+                            <h2>{grade}등급</h2>
+                            <p>{recommendation}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown("### 📝 상세 분석")
+                        for point in analysis_points:
+                            st.markdown(f"- {point}")
+                    
+                    # 투자 가이드
+                    st.markdown("---")
+                    st.markdown("### 🎯 투자 가이드")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("""
+                        **🟢 긍정적 요소:**
+                        - 꾸준한 상승 추세
+                        - 낮은 변동성
+                        - 높은 샤프 비율
+                        - 적은 최대 낙폭
+                        """)
+                    
+                    with col2:
+                        st.markdown("""
+                        **🔴 주의 요소:**
+                        - 높은 변동성
+                        - 낮은 샤프 비율
+                        - 큰 최대 낙폭
+                        - 지속적인 하락 추세
+                        """)
+                    
+                    # 맞춤형 조언
+                    st.markdown("### 💭 맞춤형 투자 조언")
+                    
+                    if volatility > 30:
+                        st.warning("⚠️ **고위험 투자자에게 적합**: 이 종목은 높은 변동성을 보이므로 위험을 감수할 수 있는 투자자에게 적합합니다.")
+                    elif volatility < 15:
+                        st.success("✅ **안정형 투자자에게 적합**: 낮은 변동성으로 안정적인 투자를 원하는 분에게 적합합니다.")
+                    else:
+                        st.info("📊 **중간 위험 투자자에게 적합**: 적당한 수준의 위험과 수익을 원하는 투자자에게 적합합니다.")
+                    
+                    # 투자 전략 제안
+                    st.markdown("### 💰 투자 전략 제안")
+                    
+                    strategy_suggestions = []
+                    
+                    if total_return > 0 and volatility < 20:
+                        strategy_suggestions.append("📈 **장기 보유 전략**: 안정적인 수익과 낮은 변동성으로 장기 투자에 적합합니다.")
+                    
+                    if volatility > 25:
+                        strategy_suggestions.append("🎯 **적립식 투자**: 높은 변동성을 완화하기 위해 분할 매수를 고려해보세요.")
+                    
+                    if sharpe_ratio > 1:
+                        strategy_suggestions.append("⚖️ **포트폴리오 핵심 종목**: 위험 대비 수익률이 우수하여 포트폴리오의 핵심 종목으로 고려할 수 있습니다.")
+                    
+                    if max_drawdown < -20:
+                        strategy_suggestions.append("🛡️ **손절매 설정**: 큰 낙폭 가능성이 있으므로 손절매 라인을 미리 설정하는 것이 좋습니다.")
+                    
+                    if not strategy_suggestions:
+                        strategy_suggestions.append("📊 **균형 잡힌 접근**: 현재 지표들을 종합적으로 고려하여 신중한 투자를 권장합니다.")
+                    
+                    for suggestion in strategy_suggestions:
+                        st.markdown(f"- {suggestion}")
+                    
+                    # 주의사항
+                    st.markdown("---")
+                    st.markdown("### ⚠️ 투자 주의사항")
                     st.markdown("""
-                    ### 💡 활용 방법
-                    
-                    1. **포트폴리오 구성**: 상관관계가 낮은 종목들을 조합하여 리스크 분산
-                    2. **시장 타이밍**: 높은 양의 상관관계 종목은 시장 상승기에 집중 투자
-                    3. **헤지 전략**: 음의 상관관계 종목으로 시장 하락 리스크 대비
-                    4. **장기 투자**: 상관관계는 시간에 따라 변하므로 정기적 재분석 필요
+                    - 이 분석은 **과거 데이터 기반**이며, 미래 수익을 보장하지 않습니다
+                    - **분산투자**를 통해 리스크를 분산시키세요
+                    - 투자 전 **본인의 투자 성향과 목표**를 명확히 하세요
+                    - **정기적인 포트폴리오 리밸런싱**을 고려하세요
+                    - 투자는 **여유자금**으로만 하시기 바랍니다
                     """)
-        else:
-            # 코스피 데이터가 없을 때는 기존 차트만 표시
-            price_df = yearly_data.reset_index()
-            price_df.columns = ['연도', '종가']
-            fig_price = go.Figure(go.Bar(x=price_df['연도'], y=price_df['종가'], marker_color='#4472C4'))
-            fig_price.update_layout(
-                title=f"{company_name} 연도별 종가 추이", 
-                xaxis_title='연도', 
-                yaxis_title='종가',
-                template='plotly_white'
-            )
-            st.plotly_chart(fig_price, use_container_width=True)
-            st.warning("⚠️ 코스피 비교 데이터를 불러올 수 없어 개별 차트만 표시됩니다.")
-        
-        # 6. 상세 데이터 테이블 (접기/펼치기)
-        with st.expander("📋 연도별 상세 데이터 보기"):
-            detail_df = pd.DataFrame({
-                '연도': yearly_data.index,
-                '종가': yearly_data.values,
-                '수익률(%)': ['-'] + [f"{x:.2f}%" for x in returns.values]
-            })
-            st.dataframe(detail_df, use_container_width=True)
-            
-            # CSV 다운로드 버튼
-            csv = detail_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 CSV로 다운로드",
-                data=csv,
-                file_name=f"{company_name}_{start_year}-{end_year}_분석결과.csv",
-                mime="text/csv"
-            )
-    else:
-        st.error(f"❌ '{company_name} ({ticker})' 데이터를 불러올 수 없습니다.")
-        st.info("💡 다른 종목을 선택해보시거나, 티커 심볼을 확인해주세요.")
-        
-        # 추천 종목 표시
-        st.subheader("🎯 추천 종목")
-        recommended = ["삼성전자 (005930) [KRX]", "SK하이닉스 (000660) [KRX]", "NAVER (035420) [KRX]", "카카오 (035720) [KRX]"]
-        cols = st.columns(len(recommended))
-        
-        for i, rec in enumerate(recommended):
-            with cols[i]:
-                if st.button(rec.split(' (')[0], key=f"rec_{i}"):
-                    st.session_state.selected_company = rec
-                    st.session_state.last_selectbox_value = rec
-                    company_name = rec.split('(')[0].strip()
-                    st.session_state.text_input_value = company_name
-                    st.session_state.last_textinput_value = company_name
-                    st.rerun()
+                    
+    except Exception as e:
+        st.error(f"❌ 오류가 발생했습니다: {str(e)}")
+        st.markdown("종목 코드/심볼을 확인하거나 다른 종목을 시도해보세요.")
 
-# Footer
-st.markdown("---")
-st.markdown("""
-### 📌 사용법 가이드
-- **selectbox**: 드롭다운에서 회사 선택 → 자동으로 입력창에 회사명 표시
-- **직접 입력**: 회사명이나 티커 입력 → 자동으로 해당 항목이 드롭다운에서 선택됨
-- **검색 결과**: 여러 후보가 있을 때 "선택" 버튼으로 바로 선택 가능
-- **분석 결과**: 수익률 분포, 코스피 비교, 상관관계까지 종합 분석
+elif not stock_symbol and analyze_button:
+    st.warning("⚠️ 종목을 선택하거나 입력해주세요.")
 
-### 🎯 주요 기능
-- ✅ **양방향 연동**: selectbox ↔ 직접입력 완전 동기화
-- ✅ **수익률 분포**: 연도별 수익률을 구간별로 시각화
-- ✅ **코스피 비교**: 개별 종목과 시장 지수 동시 비교
-- ✅ **상관관계 분석**: 시장과의 동조화 정도 수치화
-- ✅ **상세 데이터**: CSV 다운로드로 추가 분석 가능
-
-### ⚡ 개선사항
-- 🔄 **실시간 연동**: UI 요소간 즉시 반영
-- 📊 **이중 축 차트**: 스케일이 다른 데이터 동시 표시
-- 🎨 **개선된 시각화**: 손실/이익 경계선 최적화
-- 📈 **통계 분석**: 상관계수로 투자 인사이트 제공
-""")
+else:
+    # 초기 화면
+    st.markdown("""
+    ## 🚀 사용 방법
+    
+    1. **왼쪽 사이드바**에서 시장을 선택하세요 (국내/해외)
+    2. **종목**을 선택하거나 직접 입력하세요
+    3. **분석 기간**을 선택하세요
+    4. **'분석 시작'** 버튼을 클릭하세요
+    
+    ## 📊 제공되는 분석
+    
+    - **주가 차트**: 캔들스틱 차트와 거래량, 이동평균선
+    - **수익률 분석**: 누적 수익률과 분포, 수익률 통계
+    - **주요 지표**: 수익률, 변동성, 샤프 비율, MDD
+    - **리스크 분석**: VaR, 드로우다운 분석
+    - **투자 분석**: 종합 평가 및 맞춤형 투자 조언
+    
+    ## 💡 팁
+    
+    - **국내 주식**: 6자리 숫자 코드 (예: 005930)
+    - **해외 주식**: 영문 심볼 (예: AAPL, TSLA)
+    
+    ## 🎯 추천 테스트 종목
+    
+    ### 국내 📈
+    - **대형주**: 삼성전자(005930), SK하이닉스(000660)
+    - **금융**: KB금융(105560)
+    - **기술**: NAVER(035420), 카카오(035720)
+    
+    ### 해외 🌍
+    - **안정형**: Apple(AAPL), Microsoft(MSFT)
+    - **성장형**: Tesla(TSLA), NVIDIA(NVDA)
+    - **가치주**: Berkshire Hathaway(BRK-B)
+    
+    ## 📈 투자 지표 설명
+    
+    ### 🎯 샤프 비율 (Sharpe Ratio)
+    - 위험 대비 수익률을 측정하는 지표
+    - **1.0 이상**: 우수 | **0~1.0**: 보통 | **0 미만**: 부족
+    
+    ### 📉 최대 낙폭 (MDD)
+    - 최고점에서 최저점까지의 최대 하락폭
+    - **-10% 이상**: 양호 | **-20% 이상**: 주의 | **-20% 미만**: 위험
+    
+    ### ⚡ 변동성 (Volatility)
+    - 주가 움직임의 정도를 나타내는 지표
+    - **20% 미만**: 안정적 | **20-30%**: 보통 | **30% 이상**: 높음
+    
+    ### 💰 VaR (Value at Risk)
+    - 일정 확률로 발생할 수 있는 최대 손실
+    - 95% VaR -2%라면, 95% 확률로 하루 손실이 2%를 넘지 않음
+    """)
+    
+    # 샘플 데이터 미리보기
+    with st.expander("📋 인기 종목 리스트 미리보기"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 🇰🇷 국내 인기 종목")
+            st.markdown("""
+            - 삼성전자 (005930)
+            - SK하이닉스 (000660)
+            - NAVER (035420)
+            - 카카오 (035720)
+            - LG화학 (051910)
+            - 현대차 (005380)
+            - KB금융 (105560)
+            - 셀트리온 (068270)
+            """)
+        
+        with col2:
+            st.markdown("### 🇺🇸 해외 인기 종목")
+            st.markdown("""
+            - Apple (AAPL)
+            - Microsoft (MSFT)
+            - Google (GOOGL)
+            - Amazon (AMZN)
+            - Tesla (TSLA)
+            - NVIDIA (NVDA)
+            - Meta (META)
+            - Netflix (NFLX)
+            """)
